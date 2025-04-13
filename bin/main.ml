@@ -1,7 +1,7 @@
 open Core
 
-let print_tokens str =
-  let lexer = Lexer.create str in
+let print_tokens str file_path =
+  let lexer = Lexer.create str file_path in
 
   let rec print_next () =
     match Lexer.get_next lexer with
@@ -17,7 +17,7 @@ let print_tokens str =
 let print_tokens_from_file filename =
   try
     let content = Stdio.In_channel.read_all filename in
-    print_tokens content
+    print_tokens content filename
   with Sys_error msg -> Stdlib.Format.printf "Error reading file: %s\n" msg
 ;;
 
