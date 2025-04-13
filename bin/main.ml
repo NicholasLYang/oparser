@@ -6,9 +6,13 @@ let print_tokens str file_path =
   let rec print_next () =
     match Lexer.get_next lexer with
     | Ok (Some token) ->
-        Stdlib.Format.printf " [%s] " (Lexer.string_of_token token);
+        let token_string = Lexer.string_of_token (Span.value token) in
+        let span = Span.span token in
+        let start_index = Span.start_index span in
+        let end_index = Span.end_index span in
+        Stdlib.Format.printf " [%s (%i-%i)] " token_string start_index end_index;
         print_next ()
-    | Ok None -> Stdlib.Format.printf "end"
+    | Ok None -> Stdlib.Format.printf "\n"
     | Error diagnostic -> Lexer.print_error diagnostic
   in
 

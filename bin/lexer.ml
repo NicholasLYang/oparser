@@ -1,5 +1,6 @@
 open Core
 open Grace
+open Span
 
 type code = InvalidCharacter
 type token = Plus | Minus
@@ -15,15 +16,18 @@ let get_source lexer = `File lexer.file_path
 
 let get_next_char lexer =
   let char = String.get lexer.content lexer.current_index in
+  let index = lexer.current_index in
   lexer.current_index <- lexer.current_index + 1;
-  char
+  (char, index)
 
-let get_next lexer =
+let rec get_next lexer =
   if Int.equal lexer.current_index (String.length lexer.content) then Ok None
   else
-    match get_next_char lexer with
-    | '+' -> Ok (Some Plus)
-    | '-' -> Ok (Some Minus)
+    let char, index = get_next_char lexer in
+    match char with
+    | '+' -> Ok (Some (s Plus ~start_index:index ~end_index:index))
+    | '-' -> Ok (Some (s Minus ~start_index:index ~end_index:index))
+    | ' ' | '\n' | '\t' | '\r' -> get_next lexer
     | c ->
         let message =
           Diagnostic.Message.create
