@@ -1,0 +1,6 @@
+(executable
+ (public_name oparser)
+ (name main)
+ (libraries oparser base sedlex grace grace.ansi_renderer)
+ (preprocess
+  (pps sedlex.ppx)))

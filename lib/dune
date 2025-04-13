@@ -1,0 +1,5 @@
+(library
+ (name oparser)
+ (libraries core sedlex)
+ (preprocess
+  (pps ppx_jane sedlex.ppx)))
