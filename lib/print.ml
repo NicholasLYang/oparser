@@ -1,5 +1,5 @@
-let print_tokens str file_path =
-  let lexer = Lexer.create str file_path in
+let print_tokens str source =
+  let lexer = Lexer.create str source in
 
   let rec print_next () =
     match Lexer.get_next lexer with
@@ -15,10 +15,12 @@ let print_tokens str file_path =
   in
 
   print_next ()
-  
+
 let print_tokens_from_file filename =
   try
     let content = Stdio.In_channel.read_all filename in
-    print_tokens content filename
+    print_tokens content (`File filename)
   with Sys_error msg -> Stdlib.Format.printf "Error reading file: %s\n" msg
-;;
+
+let print_tokens_from_string str =
+  print_tokens str (`String { content = str; name = Some str })
