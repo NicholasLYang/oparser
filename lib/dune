@@ -1,5 +1,5 @@
 (library
  (name oparser)
- (libraries core sedlex)
+ (libraries core sedlex grace grace.ansi_renderer) 
  (preprocess
   (pps ppx_jane sedlex.ppx)))

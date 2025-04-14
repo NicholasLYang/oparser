@@ -1,2 +1,3 @@
 (test
+ (libraries oparser core_unix)
  (name test_oparser))
