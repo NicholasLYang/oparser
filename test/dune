@@ -1,3 +1,6 @@
-(test
+(library
  (libraries oparser)
- (name test_oparser))
+ (name test_oparser)
+ (inline_tests)
+ (preprocess
+  (pps ppx_expect)))
