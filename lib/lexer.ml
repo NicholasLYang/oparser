@@ -2,8 +2,14 @@ open Core
 open Grace
 open Span
 
+type number =
+  | Int of int
+  | Int32 of int32
+  | Int64 of int64
+  | NativeInt of nativeint
+
 type code = InvalidCharacter | EmptyCharacterLiteral
-type token = Plus | Minus | Ident | Number of int | Char
+type token = Plus | Minus | Ident | Number of number | Char
 type error = code Grace.Diagnostic.t
 type t = { mutable current_index : int; content : string; source : Source.t }
 
@@ -61,11 +67,19 @@ let rec ident lexer start =
       Some (s Ident ~start_index:start ~end_index:(lexer.current_index - 1))
   | None -> None
 
-let make_number lexer ~start_index ~end_index =
+let make_number lexer ~start_index ~end_index suffix =
   let content =
     String.sub lexer.content ~pos:start_index ~len:(end_index - start_index + 1)
   in
-  match int_of_string_opt content with
+  let number =
+    match suffix with
+    | `Int -> int_of_string_opt content |> Option.map ~f:(fun n -> Int n)
+    | `Int32 -> Int32.of_string_opt content |> Option.map ~f:(fun n -> Int32 n)
+    | `Int64 -> Int64.of_string_opt content |> Option.map ~f:(fun n -> Int64 n)
+    | `NativeInt ->
+        Nativeint.of_string_opt content |> Option.map ~f:(fun n -> NativeInt n)
+  in
+  match number with
   | Some number -> Ok (s (Number number) ~start_index ~end_index)
   | None ->
       Error
@@ -77,65 +91,116 @@ let is_hex_digit c =
   Char.is_digit c
   || Char.between c ~high:'f' ~low:'a'
   || Char.between c ~high:'F' ~low:'A'
+  || Char.equal c '_'
+
+let number_suffix lexer =
+  match get_next_char lexer with
+  | Some ('l', _) -> `Int32
+  | Some ('L', _) -> `Int64
+  | Some ('n', _) -> `NativeInt
+  | Some (_, _) ->
+      shift_back lexer;
+      `Int
+  | None -> `Int
 
 let rec hex_number lexer start =
   match get_next_char lexer with
   | Some (c, _) when is_hex_digit c -> hex_number lexer start
   | Some (_, index) ->
       shift_back lexer;
-      make_number lexer ~start_index:start ~end_index:(index - 1)
+      let suffix = number_suffix lexer in
+      make_number lexer ~start_index:start ~end_index:(index - 1) suffix
   | None ->
       make_number lexer ~start_index:start ~end_index:(lexer.current_index - 1)
+        `Int
+
+let check_first_digit lexer =
+  match peek_next_char lexer with
+  | Some ('_', index) ->
+      let message =
+        Diagnostic.Message.create "`_` found in the first position of a number"
+      in
+      Error
+        Diagnostic.(
+          createf
+            ~labels:
+              [
+                Label.primary
+                  ~range:(range (get_source lexer) index (index + 1))
+                  message;
+              ]
+            ~code:InvalidCharacter Error "Numbers cannot start with `_`")
+  | _ -> Ok ()
 
 let zero = Char.to_int '0'
-let is_octal_digit c = Int.between (Char.to_int c) ~low:zero ~high:(zero + 7)
+
+let is_octal_digit c =
+  Int.between (Char.to_int c) ~low:zero ~high:(zero + 7) || Char.equal c '_'
 
 let rec octal_number lexer start =
   match get_next_char lexer with
   | Some (c, _) when is_octal_digit c -> octal_number lexer start
   | Some (_, index) ->
       shift_back lexer;
-      make_number lexer ~start_index:start ~end_index:(index - 1)
+      let suffix = number_suffix lexer in
+      make_number lexer ~start_index:start ~end_index:(index - 1) suffix
   | None ->
       make_number lexer ~start_index:start ~end_index:(lexer.current_index - 1)
+        `Int
 
-let is_binary_digit c = Char.equal c '0' || Char.equal c '1'
+let is_binary_digit c = Char.equal c '0' || Char.equal c '1' || Char.equal c '_'
 
 let rec binary_number lexer start =
   match get_next_char lexer with
   | Some (c, _) when is_binary_digit c -> binary_number lexer start
   | Some (_, index) ->
       shift_back lexer;
-      make_number lexer ~start_index:start ~end_index:(index - 1)
+      let suffix = number_suffix lexer in
+      make_number lexer ~start_index:start ~end_index:(index - 1) suffix
   | None ->
       make_number lexer ~start_index:start ~end_index:(lexer.current_index - 1)
+        `Int
+
+let is_decimal_digit c = Char.is_digit c || Char.equal c '_'
 
 let rec decimal_number lexer start =
   match get_next_char lexer with
-  | Some (c, _) when Char.is_digit c -> decimal_number lexer start
+  | Some (c, _) when is_decimal_digit c -> decimal_number lexer start
   | Some (_, index) ->
       shift_back lexer;
-      make_number lexer ~start_index:start ~end_index:(index - 1)
+      let suffix = number_suffix lexer in
+      make_number lexer ~start_index:start ~end_index:(index - 1) suffix
   | None ->
       make_number lexer ~start_index:start ~end_index:(lexer.current_index - 1)
+        `Int
 
 let number first_char lexer start =
-  if Char.equal first_char '0' then
+  if Char.equal first_char '0' then (
     match peek_next_char lexer with
     | Some ('x', _) | Some ('X', _) ->
         (* Account for the `x` *)
         shift_forward lexer;
-        hex_number lexer start
+        check_first_digit lexer
+        |> Result.bind ~f:(fun () -> hex_number lexer start)
     | Some ('o', _) | Some ('O', _) ->
         shift_forward lexer;
-        octal_number lexer start
+        check_first_digit lexer
+        |> Result.bind ~f:(fun () -> octal_number lexer start)
     | Some ('b', _) | Some ('B', _) ->
         shift_forward lexer;
-        binary_number lexer start
+        check_first_digit lexer
+        |> Result.bind ~f:(fun () -> binary_number lexer start)
     | Some (c, _) when Char.is_digit c ->
         shift_back lexer;
         decimal_number lexer start
-    | Some _ | None -> make_number lexer ~start_index:start ~end_index:start
+    | Some _ ->
+        shift_back lexer;
+        let suffix = number_suffix lexer in
+        make_number lexer ~start_index:start
+          ~end_index:(lexer.current_index - 1) suffix
+    | None ->
+        shift_back lexer;
+        make_number lexer ~start_index:start ~end_index:start `Int)
   else (
     shift_back lexer;
     decimal_number lexer start)
@@ -322,11 +387,17 @@ let rec get_next lexer =
                 ~code:InvalidCharacter Error "Unexpected character found"))
   | None -> Ok None
 
+let string_of_number = function
+  | Int n -> sprintf "<int> %d" n
+  | Int32 n -> sprintf "<int32> %ld" n
+  | Int64 n -> sprintf "<int64> %Ld" n
+  | NativeInt n -> sprintf "<nativeint> %s" (Nativeint.to_string n)
+
 let string_of_token = function
   | Plus -> "+"
   | Minus -> "-"
   | Ident -> "<ident>"
-  | Number number -> sprintf "<number> %d" number
+  | Number number -> string_of_number number
   | Char -> "<char>"
 
 let print_error error =
