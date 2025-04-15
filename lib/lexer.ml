@@ -63,17 +63,19 @@ let rec ident lexer start =
       shift_back lexer;
       let content = String.sub lexer.content ~pos:start ~len:(index - start) in
       match keyword_of_string content with
-      | Some token ->
-          Some (s token ~start_index:start ~end_index:index)
+      | Some token -> Some (s token ~start_index:start ~end_index:index)
       | None -> Some (s (Ident content) ~start_index:start ~end_index:index))
-  | None when Int.( <> ) start lexer.current_index ->
-          let content =
-            String.sub lexer.content ~pos:start
-              ~len:(lexer.current_index - start)
-          in
+  | None when Int.( <> ) start lexer.current_index -> (
+      let content =
+        String.sub lexer.content ~pos:start ~len:(lexer.current_index - start)
+      in
+      match keyword_of_string content with
+      | Some token ->
+          Some (s token ~start_index:start ~end_index:(lexer.current_index - 1))
+      | None ->
           Some
             (s (Ident content) ~start_index:start
-               ~end_index:(lexer.current_index - 1))
+               ~end_index:(lexer.current_index - 1)))
   | None -> None
 
 let make_number lexer ~start_index ~end_index suffix =

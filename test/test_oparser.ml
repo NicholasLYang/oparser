@@ -17,6 +17,11 @@ let%expect_test _ =
     {| [<int> 2748 (0-4)]  [<int> 10 (6-7)]  [<int> 8 (9-12)]  [<int> 2 (14-17)] |}]
 
 let%expect_test _ =
+  Print.print_tokens_from_string "if let for open or";
+  [%expect
+    {| [if (0-2)]  [let (3-6)]  [for (7-10)]  [open (11-15)]  [or (16-17)] |}]
+
+let%expect_test _ =
   Print.print_tokens_from_string "0xa_bc 1_0 0o10 0b_10";
   [%expect
     {|
@@ -37,7 +42,8 @@ let%expect_test _ =
 
 let%expect_test _ =
   Print.print_tokens_from_string "'a ";
-  [%expect {|
+  [%expect
+    {|
     [1m[91merror[0;1m[0m[1m[91m[E????][0;1m[0m: [1mUnexpected character found[0m
         [36m┌─[0m 'a :1:3
     [36m  1[0m [36m│[0m  'a[31m [0m
