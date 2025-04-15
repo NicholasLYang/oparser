@@ -9,7 +9,7 @@ type number =
   | NativeInt of nativeint
 
 type code = InvalidCharacter | EmptyCharacterLiteral
-type token = Plus | Minus | Ident | Number of number | Char
+type token = Plus | Minus | Ident | Number of number | Char of char
 type error = code Grace.Diagnostic.t
 type t = { mutable current_index : int; content : string; source : Source.t }
 
@@ -20,6 +20,11 @@ let range source start stop =
 
 let get_source lexer = lexer.source
 
+(* Moves the current index forward by 1. 
+  
+  NOTE: should not be used unless you are peeking
+  at the next character, otherwise you might be at
+  the end of the file *)
 let shift_forward lexer =
   lexer.current_index <- lexer.current_index + 1;
   ()
@@ -242,27 +247,27 @@ let rec read_octal_escape lexer count acc =
 
 let char_escape lexer =
   match peek_next_char lexer with
-  | Some ('\\', _)
-  | Some ('"', _)
-  | Some ('\'', _)
-  | Some ('n', _)
-  | Some ('t', _)
-  | Some ('b', _)
-  | Some ('r', _)
-  | Some (' ', _) ->
+  | Some (('\\' as c), _)
+  | Some (('"' as c), _)
+  | Some (('\'' as c), _)
+  | Some (('n' as c), _)
+  | Some (('t' as c), _)
+  | Some (('b' as c), _)
+  | Some (('r' as c), _)
+  | Some ((' ' as c), _) ->
       shift_forward lexer;
-      Ok ()
+      Ok c
   | Some ('x', _) ->
       shift_forward lexer;
-      let _ = read_hex_escape lexer 2 0 in
-      Ok ()
+      let c = read_hex_escape lexer 2 0 in
+      Ok (Char.of_int_exn c)
   | Some ('o', _) ->
       shift_forward lexer;
-      let _ = read_octal_escape lexer 3 0 in
-      Ok ()
+      let c = read_octal_escape lexer 3 0 in
+      Ok (Char.of_int_exn c)
   | Some (c, _) when Char.is_digit c ->
-      let _ = read_decimal_escape lexer 3 0 in
-      Ok ()
+      let c = read_decimal_escape lexer 3 0 in
+      Ok (Char.of_int_exn c)
   | Some (c, index) ->
       let message =
         Diagnostic.Message.create
@@ -296,51 +301,71 @@ let char_escape lexer =
               ]
             ~code:InvalidCharacter Error "Invalid character escape")
 
-let char_literal lexer =
-  match peek_next_char lexer with
-  | Some ('\\', _) -> (
-      match char_escape lexer with
-      | Ok () ->
-          Ok
-            (Some
-               (s Char ~start_index:lexer.current_index
-                  ~end_index:(lexer.current_index - 1)))
-      | Error error -> Error error)
-  | Some ('\'', _) ->
+let end_char_literal lexer start_index char =
+  match get_next_char lexer with
+  | Some (c2, end_index) when Char.equal c2 '\'' ->
+      Ok (Some (s (Char char) ~start_index ~end_index))
+  | Some (c, index) ->
+      let message =
+        Diagnostic.Message.create
+          (Stdlib.Format.sprintf
+             "expected `'` to delimit a character literal, instead found `%c`" c)
+      in
       Error
         Diagnostic.(
-          createf ~labels:[] ~code:EmptyCharacterLiteral Error
-            "Empty character literal, did you forget to include a character?")
-  | _ -> (
+          createf
+            ~labels:
+              [
+                Label.primary
+                  ~range:(range (get_source lexer) index (index + 1))
+                  message;
+              ]
+            ~code:InvalidCharacter Error "Unexpected character found")
+  | None ->
+      let message =
+        Diagnostic.Message.create
+          "expected `'`, instead found the end of the file"
+      in
+      Error
+        Diagnostic.(
+          createf
+            ~labels:
+              [
+                Label.primary
+                  ~range:
+                    (range (get_source lexer) (lexer.current_index - 1)
+                       lexer.current_index)
+                  message;
+              ]
+            ~code:InvalidCharacter Error "Unexpected character found")
+
+let char_literal lexer start_index =
+  match peek_next_char lexer with
+  | Some ('\\', _) ->
       shift_forward lexer;
-      match get_next_char lexer with
-      | Some (c, _) when Char.equal c '\'' ->
-          Ok
-            (Some
-               (s Char ~start_index:lexer.current_index
-                  ~end_index:(lexer.current_index - 1)))
-      | Some (c, index) ->
-          let message =
-            Diagnostic.Message.create
-              (Stdlib.Format.sprintf
-                 "expected `'` to delimit a character literal, instead found \
-                  `%c`"
-                 c)
-          in
-          Error
-            Diagnostic.(
-              createf
-                ~labels:
-                  [
-                    Label.primary
-                      ~range:(range (get_source lexer) index (index + 1))
-                      message;
-                  ]
-                ~code:InvalidCharacter Error "Unexpected character found")
+      char_escape lexer |> Result.bind ~f:(end_char_literal lexer start_index)
+  | Some ('\'', index) ->
+      let message =
+        Diagnostic.Message.create "character literal cannot be empty"
+      in
+      Error
+        Diagnostic.(
+          createf
+            ~labels:
+              [
+                Label.primary
+                  ~range:(range (get_source lexer) index (index + 1))
+                  message;
+              ]
+            ~code:EmptyCharacterLiteral Error
+            "Empty character literal, did you forget to include a character?")
+  | _ ->
+      (match get_next_char lexer with
+      | Some (c, _) -> Ok c
       | None ->
           let message =
             Diagnostic.Message.create
-              "expected `'`, instead found the end of the file"
+              "expected character literal, instead found the end of the file"
           in
           Error
             Diagnostic.(
@@ -349,11 +374,12 @@ let char_literal lexer =
                   [
                     Label.primary
                       ~range:
-                        (range (get_source lexer) (lexer.current_index - 1)
+                        (range (get_source lexer) lexer.current_index
                            lexer.current_index)
                       message;
                   ]
                 ~code:InvalidCharacter Error "Unexpected character found"))
+      |> Result.bind ~f:(end_char_literal lexer start_index)
 
 let rec get_next lexer =
   match get_next_char lexer with
@@ -362,7 +388,7 @@ let rec get_next lexer =
       | '+' -> Ok (Some (s Plus ~start_index:index ~end_index:index))
       | '-' -> Ok (Some (s Minus ~start_index:index ~end_index:index))
       | ' ' | '\n' | '\t' | '\r' -> get_next lexer
-      | '\'' -> char_literal lexer
+      | '\'' -> char_literal lexer index
       | c when Char.is_alpha c || Char.equal c '_' || is_unicode_char c ->
           Ok (ident lexer index)
       | c when Char.is_digit c ->
@@ -370,7 +396,8 @@ let rec get_next lexer =
       | c ->
           let message =
             Diagnostic.Message.create
-              (Stdlib.Format.sprintf "expected `+`, `-`, found `%c`" c)
+              (* TODO: add a better message *)
+              (Stdlib.Format.sprintf "expected a token, found `%c`" c)
           in
           Error
             Diagnostic.(
@@ -398,7 +425,7 @@ let string_of_token = function
   | Minus -> "-"
   | Ident -> "<ident>"
   | Number number -> string_of_number number
-  | Char -> "<char>"
+  | Char c -> sprintf "<char> %c" c
 
 let print_error error =
   Stdlib.Format.printf "%a@." Grace_ansi_renderer.(pp_diagnostic ()) error
