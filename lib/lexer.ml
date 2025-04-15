@@ -1,15 +1,9 @@
 open Core
 open Grace
 open Span
-
-type number =
-  | Int of int
-  | Int32 of int32
-  | Int64 of int64
-  | NativeInt of nativeint
+open Token
 
 type code = InvalidCharacter | EmptyCharacterLiteral
-type token = Plus | Minus | Ident of string | Number of number | Char of char
 type error = code Grace.Diagnostic.t
 type t = { mutable current_index : int; content : string; source : Source.t }
 
@@ -64,18 +58,22 @@ let rec ident lexer start =
     when Char.is_alphanum c || Char.equal c '_' || Char.equal c '\''
          || is_unicode_char c ->
       ident lexer start
-  | Some (_, index) ->
+  | Some (_, index) -> (
       (* Don't forget to move index back so we can lex the next token correctly *)
       shift_back lexer;
       let content = String.sub lexer.content ~pos:start ~len:(index - start) in
-      Some (s (Ident content) ~start_index:start ~end_index:index)
+      match keyword_of_string content with
+      | Some token ->
+          Some (s token ~start_index:start ~end_index:index)
+      | None -> Some (s (Ident content) ~start_index:start ~end_index:index))
   | None when Int.( <> ) start lexer.current_index ->
-      let content =
-        String.sub lexer.content ~pos:start ~len:(lexer.current_index - start)
-      in
-      Some
-        (s (Ident content) ~start_index:start
-           ~end_index:(lexer.current_index - 1))
+          let content =
+            String.sub lexer.content ~pos:start
+              ~len:(lexer.current_index - start)
+          in
+          Some
+            (s (Ident content) ~start_index:start
+               ~end_index:(lexer.current_index - 1))
   | None -> None
 
 let make_number lexer ~start_index ~end_index suffix =
@@ -419,19 +417,6 @@ let rec get_next lexer =
                     ]
                 ~code:InvalidCharacter Error "Unexpected character found"))
   | None -> Ok None
-
-let string_of_number = function
-  | Int n -> sprintf "<int> %d" n
-  | Int32 n -> sprintf "<int32> %ld" n
-  | Int64 n -> sprintf "<int64> %Ld" n
-  | NativeInt n -> sprintf "<nativeint> %s" (Nativeint.to_string n)
-
-let string_of_token = function
-  | Plus -> "+"
-  | Minus -> "-"
-  | Ident content -> sprintf "<ident> %s" content
-  | Number number -> string_of_number number
-  | Char c -> sprintf "<char> %c" c
 
 let print_error error =
   Stdlib.Format.printf "%a@." Grace_ansi_renderer.(pp_diagnostic ()) error

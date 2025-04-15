@@ -4,7 +4,7 @@ let print_tokens str source =
   let rec print_next () =
     match Lexer.get_next lexer with
     | Ok (Some token) ->
-        let token_string = Lexer.string_of_token (Span.value token) in
+        let token_string = Token.string_of_token (Span.value token) in
         let span = Span.span token in
         let start_index = Span.start_index span in
         let end_index = Span.end_index span in
