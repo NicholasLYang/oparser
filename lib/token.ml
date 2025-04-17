@@ -7,6 +7,9 @@ type number =
   | NativeInt of nativeint
 
 type token =
+  | String of string
+  | LParen
+  | RParen
   | Plus
   | Minus
   | Ident of string
@@ -132,6 +135,9 @@ let string_of_number = function
   | NativeInt n -> sprintf "<nativeint> %s" (Nativeint.to_string n)
 
 let string_of_token = function
+  | String content -> sprintf "<string> %s" content
+  | LParen -> "("
+  | RParen -> ")"
   | Plus -> "+"
   | Minus -> "-"
   | Ident content -> sprintf "<ident> %s" content

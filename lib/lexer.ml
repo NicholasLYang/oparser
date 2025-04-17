@@ -78,6 +78,36 @@ let rec ident lexer start =
                ~end_index:(lexer.current_index - 1)))
   | None -> None
 
+let rec comment lexer start_index nesting_level =
+  match get_next_char lexer with
+  | Some ('(', _) -> (
+      match peek_next_char lexer with
+      | Some ('*', _) ->
+          shift_forward lexer;
+          comment lexer start_index (nesting_level + 1)
+      | _ -> comment lexer start_index nesting_level)
+  | Some ('*', _) -> (
+      match peek_next_char lexer with
+      | Some (')', _) ->
+          shift_forward lexer;
+          if Int.equal nesting_level 1 then Ok ()
+          else comment lexer start_index (nesting_level - 1)
+      | _ -> comment lexer start_index nesting_level)
+  | Some (_, _) -> comment lexer start_index nesting_level
+  | None ->
+      let message = Diagnostic.Message.create "Unterminated comment" in
+      Error
+        Diagnostic.(
+          createf
+            ~labels:
+              [
+                Label.primary
+                  ~range:
+                    (range (get_source lexer) start_index lexer.current_index)
+                  message;
+              ]
+            ~code:InvalidCharacter Error "Unterminated comment")
+
 let make_number lexer ~start_index ~end_index suffix =
   let content =
     String.sub lexer.content ~pos:start_index ~len:(end_index - start_index + 1)
@@ -387,14 +417,193 @@ let char_literal lexer start_index =
                 ~code:InvalidCharacter Error "Unexpected character found"))
       |> Result.bind ~f:(end_char_literal lexer start_index)
 
+let rec consume_hex_digits lexer acc =
+  match peek_next_char lexer with
+  | Some (c, _) when Char.is_hex_digit c ->
+      shift_forward lexer;
+      consume_hex_digits lexer (acc ^ String.make 1 c)
+  | Some ('}', _) ->
+      shift_forward lexer;
+      Ok acc
+  | Some (_, index) ->
+      Error
+        Diagnostic.(
+          createf
+            ~labels:
+              [
+                Label.primary
+                  ~range:(range (get_source lexer) index (index + 1))
+                  (Diagnostic.Message.create
+                     "Invalid hex digit in unicode escape sequence");
+              ]
+            ~code:InvalidCharacter Error "Invalid unicode escape sequence")
+  | None ->
+      Error
+        Diagnostic.(
+          createf
+            ~labels:
+              [
+                Label.primary
+                  ~range:
+                    (range (get_source lexer) lexer.current_index
+                       lexer.current_index)
+                  (Diagnostic.Message.create
+                     "Unterminated unicode escape sequence");
+              ]
+            ~code:InvalidCharacter Error "Unterminated unicode escape sequence")
+
+let handle_string_escape lexer start_index buf =
+  match peek_next_char lexer with
+  | Some ('u', _) -> (
+      shift_forward lexer;
+      match peek_next_char lexer with
+      | Some ('{', _) ->
+          shift_forward lexer;
+          consume_hex_digits lexer ""
+          |> Result.bind ~f:(fun hex ->
+                 try
+                   let code = int_of_string ("0x" ^ hex) in
+                   Stdlib.Buffer.add_utf_8_uchar buf (Uchar.of_scalar_exn code);
+                   Ok buf
+                 with _ ->
+                   Error
+                     Diagnostic.(
+                       createf
+                         ~labels:
+                           [
+                             Label.primary
+                               ~range:
+                                 (range (get_source lexer) start_index
+                                    lexer.current_index)
+                               (Diagnostic.Message.create
+                                  "Invalid unicode escape sequence");
+                           ]
+                         ~code:InvalidCharacter Error
+                         "Invalid unicode escape sequence"))
+      | _ ->
+          Error
+            Diagnostic.(
+              createf
+                ~labels:
+                  [
+                    Label.primary
+                      ~range:
+                        (range (get_source lexer) lexer.current_index
+                           lexer.current_index)
+                      (Diagnostic.Message.create "Expected { after \\u");
+                  ]
+                ~code:InvalidCharacter Error "Invalid unicode escape sequence"))
+  | Some ('n', _) ->
+      shift_forward lexer;
+      Ok
+        (Buffer.add_char buf '\n';
+         buf)
+  | Some ('r', _) ->
+      shift_forward lexer;
+      Ok
+        (Buffer.add_char buf '\r';
+         buf)
+  | Some ('t', _) ->
+      shift_forward lexer;
+      Ok
+        (Buffer.add_char buf '\t';
+         buf)
+  | Some ('b', _) ->
+      shift_forward lexer;
+      Ok
+        (Buffer.add_char buf '\b';
+         buf)
+  | Some ('"', _) ->
+      shift_forward lexer;
+      Ok
+        (Buffer.add_char buf '"';
+         buf)
+  | Some ('\\', _) ->
+      shift_forward lexer;
+      Ok
+        (Buffer.add_char buf '\\';
+         buf)
+  | Some ('\n', _) ->
+      shift_forward lexer;
+      let rec skip_whitespace () =
+        match peek_next_char lexer with
+        | Some (' ', _) | Some ('\t', _) ->
+            shift_forward lexer;
+            skip_whitespace ()
+        | _ -> ()
+      in
+      skip_whitespace ();
+      Ok buf
+  | Some (_, index) ->
+      Error
+        Diagnostic.(
+          createf
+            ~labels:
+              [
+                Label.primary
+                  ~range:(range (get_source lexer) index (index + 1))
+                  (Diagnostic.Message.create "Invalid escape sequence");
+              ]
+            ~code:InvalidCharacter Error "Invalid escape sequence")
+  | None ->
+      Error
+        Diagnostic.(
+          createf
+            ~labels:
+              [
+                Label.primary
+                  ~range:
+                    (range (get_source lexer) lexer.current_index
+                       lexer.current_index)
+                  (Diagnostic.Message.create "Unterminated string literal");
+              ]
+            ~code:InvalidCharacter Error "Unterminated string literal")
+
+let string_literal lexer start_index =
+  let rec consume_string buf =
+    match peek_next_char lexer with
+    | Some ('"', end_index) ->
+        shift_forward lexer;
+        Ok (Some (s (String (Buffer.contents buf)) ~start_index ~end_index))
+    | Some ('\\', _) ->
+        shift_forward lexer;
+        handle_string_escape lexer start_index buf
+        |> Result.bind ~f:consume_string
+    | Some (c, _) ->
+        shift_forward lexer;
+        Buffer.add_char buf c;
+        consume_string buf
+    | None ->
+        Error
+          Diagnostic.(
+            createf
+              ~labels:
+                [
+                  Label.primary
+                    ~range:
+                      (range (get_source lexer) start_index lexer.current_index)
+                    (Diagnostic.Message.create "Unterminated string literal");
+                ]
+              ~code:InvalidCharacter Error "Unterminated string literal")
+  in
+  consume_string (Buffer.create 64)
+
 let rec get_next lexer =
   match get_next_char lexer with
   | Some (char, index) -> (
       match char with
+      | '(' -> (
+          match peek_next_char lexer with
+          | Some ('*', _) ->
+              shift_forward lexer;
+              comment lexer index 1 |> Result.bind ~f:(fun () -> get_next lexer)
+          | _ -> Ok (Some (s LParen ~start_index:index ~end_index:index)))
+      | ')' -> Ok (Some (s RParen ~start_index:index ~end_index:index))
       | '+' -> Ok (Some (s Plus ~start_index:index ~end_index:index))
       | '-' -> Ok (Some (s Minus ~start_index:index ~end_index:index))
       | ' ' | '\n' | '\t' | '\r' -> get_next lexer
       | '\'' -> char_literal lexer index
+      | '"' -> string_literal lexer index
       | c when Char.is_alpha c || Char.equal c '_' || is_unicode_char c ->
           Ok (ident lexer index)
       | c when Char.is_digit c ->

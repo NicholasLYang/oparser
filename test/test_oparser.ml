@@ -22,6 +22,14 @@ let%expect_test _ =
     {| [if (0-2)]  [let (3-6)]  [for (7-10)]  [open (11-15)]  [or (16-17)] |}]
 
 let%expect_test _ =
+  Print.print_tokens_from_string "(* comment *)";
+  [%expect {| |}]
+
+let%expect_test _ =
+  Print.print_tokens_from_string "(* comment (* nested *) *)";
+  [%expect {| |}]
+
+let%expect_test _ =
   Print.print_tokens_from_string "0xa_bc 1_0 0o10 0b_10";
   [%expect
     {|
