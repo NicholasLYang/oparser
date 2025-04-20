@@ -42,6 +42,17 @@ let get_next_char lexer =
     shift_forward lexer;
     Some (char, index)
 
+let match_while lexer ~cond =
+  let rec match_while_aux () =
+    match get_next_char lexer with
+    | Some (c, _) when cond c ->
+        shift_forward lexer;
+        match_while_aux ()
+    | Some (_, index) -> index
+    | None -> lexer.current_index
+  in
+  match_while_aux ()
+
 let is_unicode_char c =
   let code = Char.to_int c in
   Int.between code ~low:0xdf ~high:0xf6
@@ -52,31 +63,16 @@ let is_unicode_char c =
   || Int.equal code 0x152 || Int.equal code 0x160 || Int.equal code 0x17d
   || Int.equal code 0x178 || Int.equal code 0x1e9e
 
-let rec ident lexer start =
-  match get_next_char lexer with
-  | Some (c, _)
-    when Char.is_alphanum c || Char.equal c '_' || Char.equal c '\''
-         || is_unicode_char c ->
-      ident lexer start
-  | Some (_, index) -> (
-      (* Don't forget to move index back so we can lex the next token correctly *)
-      shift_back lexer;
-      let content = String.sub lexer.content ~pos:start ~len:(index - start) in
-      match keyword_of_string content with
-      | Some token -> Some (s token ~start_index:start ~end_index:index)
-      | None -> Some (s (Ident content) ~start_index:start ~end_index:index))
-  | None when Int.( <> ) start lexer.current_index -> (
-      let content =
-        String.sub lexer.content ~pos:start ~len:(lexer.current_index - start)
-      in
-      match keyword_of_string content with
-      | Some token ->
-          Some (s token ~start_index:start ~end_index:(lexer.current_index - 1))
-      | None ->
-          Some
-            (s (Ident content) ~start_index:start
-               ~end_index:(lexer.current_index - 1)))
-  | None -> None
+let ident lexer start =
+  let end_index =
+    match_while lexer ~cond:(fun c ->
+        Char.is_alphanum c || Char.equal c '_' || Char.equal c '\''
+        || is_unicode_char c)
+  in
+  let content = String.sub lexer.content ~pos:start ~len:(end_index - start) in
+  match keyword_of_string content with
+  | Some token -> s token ~start_index:start ~end_index
+  | None -> s (Ident content) ~start_index:start ~end_index
 
 let rec comment lexer start_index nesting_level =
   match get_next_char lexer with
@@ -95,7 +91,9 @@ let rec comment lexer start_index nesting_level =
       | _ -> comment lexer start_index nesting_level)
   | Some (_, _) -> comment lexer start_index nesting_level
   | None ->
-      let message = Diagnostic.Message.create "Unterminated comment" in
+      let message =
+        Diagnostic.Message.create "Comment begins here and is not terminated"
+      in
       Error
         Diagnostic.(
           createf
@@ -106,7 +104,7 @@ let rec comment lexer start_index nesting_level =
                     (range (get_source lexer) start_index lexer.current_index)
                   message;
               ]
-            ~code:InvalidCharacter Error "Unterminated comment")
+            ~code:InvalidCharacter Error "Comment is not terminated")
 
 let make_number lexer ~start_index ~end_index suffix =
   let content =
@@ -588,6 +586,84 @@ let string_literal lexer start_index =
   in
   consume_string (Buffer.create 64)
 
+let is_core_operator c =
+  match c with
+  | '$' | '&' | '*' | '+' | '-' | '/' | '=' | '>' | '@' | '^' | '|' -> true
+  | _ -> false
+
+let is_operator_char c =
+  is_core_operator c
+  || match c with '%' | '<' | '!' | '.' | ':' | '?' | '~' -> true | _ -> false
+
+let infix_symbol lexer start_index =
+  let rec consume_operator () =
+    match peek_next_char lexer with
+    | Some (c, _) when is_operator_char c ->
+        shift_forward lexer;
+        consume_operator ()
+    | Some (_, end_index) ->
+        let content =
+          String.sub lexer.content ~pos:start_index
+            ~len:(end_index - start_index)
+        in
+        s (InfixOp content) ~start_index ~end_index
+    | None ->
+        let content =
+          String.sub lexer.content ~pos:start_index
+            ~len:(lexer.current_index - start_index)
+        in
+        s (InfixOp content) ~start_index ~end_index:lexer.current_index
+  in
+  match peek_next_char lexer with
+  | Some ('#', _) -> (
+      shift_forward lexer;
+      (* Must have at least one more operator char after # *)
+      match peek_next_char lexer with
+      | Some (c, _) when is_operator_char c ->
+          shift_forward lexer;
+          Ok (Some (consume_operator ()))
+      | _ ->
+          Error
+            Diagnostic.(
+              createf
+                ~labels:
+                  Label.
+                    [
+                      primary
+                        ~range:
+                          (range (get_source lexer) start_index
+                             lexer.current_index)
+                        (Message.create "Expected operator character after #");
+                    ]
+                ~code:InvalidCharacter Error "Invalid operator"))
+  | Some (c, _) when is_core_operator c || Char.equal c '%' || Char.equal c '<'
+    ->
+      shift_forward lexer;
+      Ok (Some (consume_operator ()))
+  | _ -> assert false (* Should be called only with valid start chars *)
+
+(* We've seen a ~, so we need to check if it's a label, i.e. `~label` or an operator, i.e. `~+` *)
+let label_or_operator lexer start_index ~fallback =
+  match peek_next_char lexer with
+  | Some (c, index) when is_operator_char c ->
+      let end_index = match_while lexer ~cond:is_operator_char in
+      let content =
+        String.sub lexer.content ~pos:index ~len:(end_index - index)
+      in
+      Ok (Some (s (InfixOp content) ~start_index ~end_index))
+  | Some (c, index)
+    when Char.is_lowercase c || Char.equal c '_' || is_unicode_char c ->
+      let end_index =
+        match_while lexer ~cond:(fun c ->
+            Char.is_lowercase c || Char.equal c '_' || is_unicode_char c)
+      in
+      let content =
+        String.sub lexer.content ~pos:index ~len:(end_index - index)
+      in
+      Ok (Some (s (Label content) ~start_index ~end_index))
+  | Some (_, index) -> Ok (Some (s fallback ~start_index ~end_index:index))
+  | None -> Ok (Some (s fallback ~start_index ~end_index:lexer.current_index))
+
 let rec get_next lexer =
   match get_next_char lexer with
   | Some (char, index) -> (
@@ -604,8 +680,12 @@ let rec get_next lexer =
       | ' ' | '\n' | '\t' | '\r' -> get_next lexer
       | '\'' -> char_literal lexer index
       | '"' -> string_literal lexer index
+      | '~' -> label_or_operator lexer index ~fallback:Tilde
+      | '?' -> label_or_operator lexer index ~fallback:Question
+      | c when is_core_operator c || Char.equal c '%' || Char.equal c '<' ->
+          infix_symbol lexer index
       | c when Char.is_alpha c || Char.equal c '_' || is_unicode_char c ->
-          Ok (ident lexer index)
+          Ok (Some (ident lexer index))
       | c when Char.is_digit c ->
           number c lexer index |> Result.map ~f:(fun token -> Some token)
       | c ->

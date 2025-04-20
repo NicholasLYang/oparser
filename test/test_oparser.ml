@@ -30,6 +30,25 @@ let%expect_test _ =
   [%expect {| |}]
 
 let%expect_test _ =
+  Print.print_tokens_from_string "\"foo\"";
+  [%expect {| [<string> foo (0-4)] |}]
+
+let%expect_test _ =
+  Print.print_tokens_from_string "\"\\u{1f600}\"";
+  [%expect {| [<string> 😀 (0-10)] |}]
+
+let%expect_test _ =
+  Print.print_tokens_from_string " \" \\\" \"";
+  [%expect {| [<string>  "  (1-6)] |}]
+
+let%expect_test _ =
+  Print.print_tokens_from_string "\"\\n\"";
+  [%expect {|
+    [<string>
+    (0-3)]
+    |}]
+
+let%expect_test _ =
   Print.print_tokens_from_string "0xa_bc 1_0 0o10 0b_10";
   [%expect
     {|
@@ -57,3 +76,11 @@ let%expect_test _ =
     [36m  1[0m [36m│[0m  'a[31m [0m
         [36m│[0m    [31m^[0m [31mexpected `'` to delimit a character literal, instead found ` `[0m
     |}]
+
+let%expect_test _ =
+  Print.print_tokens_from_string "a <%> b";
+  [%expect {| [<ident> a (0-1)]  [<infixop> <%> (2-5)]  [<ident> b (6-6)] |}]
+
+let%expect_test _ =
+  Print.print_tokens_from_string "a >>= b";
+  [%expect {| [<ident> a (0-1)]  [<infixop> >>= (2-5)]  [<ident> b (6-6)] |}]

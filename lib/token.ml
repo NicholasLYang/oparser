@@ -7,7 +7,12 @@ type number =
   | NativeInt of nativeint
 
 type token =
+  | Label of string
+  | OptLabel of string
+  | InfixOp of string
   | String of string
+  | Tilde
+  | Question
   | LParen
   | RParen
   | Plus
@@ -135,6 +140,11 @@ let string_of_number = function
   | NativeInt n -> sprintf "<nativeint> %s" (Nativeint.to_string n)
 
 let string_of_token = function
+  | Tilde -> "~"
+  | Question -> "?"
+  | Label content -> sprintf "<label> %s" content
+  | OptLabel content -> sprintf "<optlabel> %s" content
+  | InfixOp content -> sprintf "<infixop> %s" content
   | String content -> sprintf "<string> %s" content
   | LParen -> "("
   | RParen -> ")"
