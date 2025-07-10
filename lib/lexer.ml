@@ -5,9 +5,9 @@ open Token
 
 type code = InvalidCharacter | EmptyCharacterLiteral
 type error = code Grace.Diagnostic.t
-type t = { mutable current_index : int; content : string; source : Source.t }
+type t = { mutable current_index : int; content : string; source : Source.t; mutable at_line_start : bool }
 
-let create content source = { current_index = 0; content; source }
+let create content source = { current_index = 0; content; source; at_line_start = true }
 
 let range source start stop =
   Range.create ~source (Byte_index.of_int start) (Byte_index.of_int stop)
@@ -44,7 +44,7 @@ let get_next_char lexer =
 
 let match_while lexer ~cond =
   let rec match_while_aux () =
-    match get_next_char lexer with
+    match peek_next_char lexer with
     | Some (c, _) when cond c ->
         shift_forward lexer;
         match_while_aux ()
@@ -586,6 +586,84 @@ let string_literal lexer start_index =
   in
   consume_string (Buffer.create 64)
 
+(* Parse quoted-string-id: sequence of lowercase letters and underscores *)
+let parse_quoted_string_id lexer =
+  let rec consume_id acc =
+    match peek_next_char lexer with
+    | Some (c, _) when Char.is_lowercase c || Char.equal c '_' ->
+        shift_forward lexer;
+        consume_id (acc ^ String.make 1 c)
+    | _ -> acc
+  in
+  consume_id ""
+
+(* Try to parse quoted string literal with { quoted-string-id | ... | quoted-string-id } syntax *)
+let try_quoted_string_literal lexer start_index =
+  (* Save current position to restore if this isn't a quoted string *)
+  let saved_index = lexer.current_index in
+  let quoted_id = parse_quoted_string_id lexer in
+  match peek_next_char lexer with
+  | Some ('|', _) ->
+      shift_forward lexer;
+      (* Now consume content until we find | quoted_id } *)
+      let closing_delimiter = "|" ^ quoted_id ^ "}" in
+      let delimiter_len = String.length closing_delimiter in
+      let rec consume_quoted_string buf =
+        (* Check if we're at the closing delimiter first *)
+        let remaining_len = String.length lexer.content - lexer.current_index in
+        if remaining_len >= delimiter_len then (
+          let remaining_content = String.sub lexer.content ~pos:lexer.current_index ~len:delimiter_len in
+          if String.equal remaining_content closing_delimiter then (
+            (* Found closing delimiter, consume it and finish *)
+            for _ = 1 to delimiter_len do
+              match get_next_char lexer with
+              | Some _ -> ()
+              | None -> ()
+            done;
+            Ok (Some (s (QuotedString (Buffer.contents buf)) ~start_index ~end_index:(lexer.current_index - 1))))
+          else (
+            (* Not the closing delimiter, consume one character *)
+            match get_next_char lexer with
+            | Some (c, _) ->
+                Buffer.add_char buf c;
+                consume_quoted_string buf
+            | None ->
+                Error
+                  Diagnostic.(
+                    createf
+                      ~labels:
+                        [
+                          Label.primary
+                            ~range:
+                              (range (get_source lexer) start_index lexer.current_index)
+                            (Diagnostic.Message.create "Unterminated quoted string literal");
+                        ]
+                      ~code:InvalidCharacter Error "Unterminated quoted string literal")))
+        else (
+          (* Not enough characters left for closing delimiter *)
+          match get_next_char lexer with
+          | Some (c, _) ->
+              Buffer.add_char buf c;
+              consume_quoted_string buf
+          | None ->
+              Error
+                Diagnostic.(
+                  createf
+                    ~labels:
+                      [
+                        Label.primary
+                          ~range:
+                            (range (get_source lexer) start_index lexer.current_index)
+                          (Diagnostic.Message.create "Unterminated quoted string literal");
+                      ]
+                    ~code:InvalidCharacter Error "Unterminated quoted string literal"))
+      in
+      consume_quoted_string (Buffer.create 64)
+  | _ ->
+      (* Not a quoted string, restore position and return LBrace *)
+      lexer.current_index <- saved_index;
+      Ok (Some (s LBrace ~start_index ~end_index:start_index))
+
 let is_core_operator c =
   match c with
   | '$' | '&' | '*' | '+' | '-' | '/' | '=' | '>' | '@' | '^' | '|' -> true
@@ -664,31 +742,343 @@ let label_or_operator lexer start_index ~fallback =
   | Some (_, index) -> Ok (Some (s fallback ~start_index ~end_index:index))
   | None -> Ok (Some (s fallback ~start_index ~end_index:lexer.current_index))
 
+(* Parse escape sequences in line number directive strings *)
+let parse_directive_string_char lexer =
+  match peek_next_char lexer with
+  | Some ('\\', _) ->
+      shift_forward lexer;
+      (match peek_next_char lexer with
+      | Some (('\\' | '"' | '\'' | 'n' | 't' | 'b' | 'r' | ' ' as c), _) ->
+          shift_forward lexer;
+          Ok c
+      | Some (c, _) when Char.is_digit c ->
+          let c1 = Char.get_digit_exn c in
+          shift_forward lexer;
+          (match peek_next_char lexer with
+          | Some (c2, _) when Char.is_digit c2 ->
+              let d2 = Char.get_digit_exn c2 in
+              shift_forward lexer;
+              (match peek_next_char lexer with
+              | Some (c3, _) when Char.is_digit c3 ->
+                  let d3 = Char.get_digit_exn c3 in
+                  shift_forward lexer;
+                  Ok (Char.of_int_exn (c1 * 100 + d2 * 10 + d3))
+              | _ -> Ok (Char.of_int_exn (c1 * 10 + d2)))
+          | _ -> Ok (Char.of_int_exn c1))
+      | Some ('x', _) ->
+          shift_forward lexer;
+          let hex1 = read_hex_escape lexer 2 0 in
+          Ok (Char.of_int_exn hex1)
+      | Some ('o', _) ->
+          shift_forward lexer;
+          (match peek_next_char lexer with
+          | Some (c1, _) when Char.is_digit c1 && Char.get_digit_exn c1 <= 3 ->
+              let d1 = Char.get_digit_exn c1 in
+              shift_forward lexer;
+              (match peek_next_char lexer with
+              | Some (c2, _) when Char.is_digit c2 && Char.get_digit_exn c2 <= 7 ->
+                  let d2 = Char.get_digit_exn c2 in
+                  shift_forward lexer;
+                  (match peek_next_char lexer with
+                  | Some (c3, _) when Char.is_digit c3 && Char.get_digit_exn c3 <= 7 ->
+                      let d3 = Char.get_digit_exn c3 in
+                      shift_forward lexer;
+                      Ok (Char.of_int_exn (d1 * 64 + d2 * 8 + d3))
+                  | _ -> Ok (Char.of_int_exn (d1 * 8 + d2)))
+              | _ -> Ok (Char.of_int_exn d1))
+          | _ -> 
+              Error
+                Diagnostic.(
+                  createf
+                    ~labels:
+                      [
+                        Label.primary
+                          ~range:(range (get_source lexer) lexer.current_index lexer.current_index)
+                          (Diagnostic.Message.create "Invalid octal escape sequence");
+                      ]
+                    ~code:InvalidCharacter Error "Invalid octal escape sequence"))
+      | Some ('u', _) ->
+          shift_forward lexer;
+          (match peek_next_char lexer with
+          | Some ('{', _) ->
+              shift_forward lexer;
+              consume_hex_digits lexer ""
+              |> Result.bind ~f:(fun hex ->
+                     try
+                       let code = int_of_string ("0x" ^ hex) in
+                       Ok (Char.of_int_exn code)
+                     with _ -> 
+                       Error
+                         Diagnostic.(
+                           createf
+                             ~labels:
+                               [
+                                 Label.primary
+                                   ~range:(range (get_source lexer) lexer.current_index lexer.current_index)
+                                   (Diagnostic.Message.create "Invalid unicode escape sequence");
+                               ]
+                             ~code:InvalidCharacter Error "Invalid unicode escape sequence"))
+          | _ -> 
+              Error
+                Diagnostic.(
+                  createf
+                    ~labels:
+                      [
+                        Label.primary
+                          ~range:(range (get_source lexer) lexer.current_index lexer.current_index)
+                          (Diagnostic.Message.create "Expected { after \\u");
+                      ]
+                    ~code:InvalidCharacter Error "Expected { after \\u"))
+      | _ -> 
+          Error
+            Diagnostic.(
+              createf
+                ~labels:
+                  [
+                    Label.primary
+                      ~range:(range (get_source lexer) lexer.current_index lexer.current_index)
+                      (Diagnostic.Message.create "Invalid escape sequence");
+                  ]
+                ~code:InvalidCharacter Error "Invalid escape sequence"))
+  | Some ('\n', _) ->
+      shift_forward lexer;
+      Ok '\n'
+  | Some (c, _) ->
+      shift_forward lexer;
+      Ok c
+  | None -> 
+      Error
+        Diagnostic.(
+          createf
+            ~labels:
+              [
+                Label.primary
+                  ~range:(range (get_source lexer) lexer.current_index lexer.current_index)
+                  (Diagnostic.Message.create "Unexpected end of directive string");
+              ]
+            ~code:InvalidCharacter Error "Unexpected end of directive string")
+
+(* Parse line number directive: # digits " string " *)
+let parse_linenum_directive lexer start_index =
+  (* We've already seen the # character *)
+  
+  (* Parse digits (line number) *)
+  let rec consume_digits () =
+    match peek_next_char lexer with
+    | Some (c, _) when Char.is_digit c ->
+        shift_forward lexer;
+        consume_digits ()
+    | _ -> ()
+  in
+  
+  (* Must have at least one digit *)
+  match peek_next_char lexer with
+  | Some (c, _) when Char.is_digit c ->
+      consume_digits ();
+      
+      (* Expect a space *)
+      (match peek_next_char lexer with
+      | Some (' ', _) ->
+          shift_forward lexer;
+          
+          (* Expect opening quote *)
+          (match peek_next_char lexer with
+          | Some ('"', _) ->
+              shift_forward lexer;
+              
+              (* Parse string content until closing quote *)
+              let rec consume_string_content () =
+                match peek_next_char lexer with
+                | Some ('"', _) ->
+                    shift_forward lexer;
+                    Ok ()
+                | Some ('\\', _) ->
+                    parse_directive_string_char lexer
+                    |> Result.bind ~f:(fun _ -> consume_string_content ())
+                | Some ('\n', _) ->
+                    shift_forward lexer;
+                    (* Handle \ newline { space | tab } continuation *)
+                    let rec skip_line_whitespace () =
+                      match peek_next_char lexer with
+                      | Some (' ', _) | Some ('\t', _) ->
+                          shift_forward lexer;
+                          skip_line_whitespace ()
+                      | _ -> ()
+                    in
+                    skip_line_whitespace ();
+                    consume_string_content ()
+                | Some (_, _) ->
+                    shift_forward lexer;
+                    consume_string_content ()
+                | None ->
+                    Error
+                      Diagnostic.(
+                        createf
+                          ~labels:
+                            [
+                              Label.primary
+                                ~range:(range (get_source lexer) start_index lexer.current_index)
+                                (Diagnostic.Message.create "Unterminated line number directive string");
+                            ]
+                          ~code:InvalidCharacter Error "Unterminated line number directive string")
+              in
+              consume_string_content ()
+          | _ -> 
+              Error
+                Diagnostic.(
+                  createf
+                    ~labels:
+                      [
+                        Label.primary
+                          ~range:(range (get_source lexer) lexer.current_index lexer.current_index)
+                          (Diagnostic.Message.create "Expected opening quote in line number directive");
+                      ]
+                    ~code:InvalidCharacter Error "Expected opening quote in line number directive"))
+      | _ -> 
+          Error
+            Diagnostic.(
+              createf
+                ~labels:
+                  [
+                    Label.primary
+                      ~range:(range (get_source lexer) lexer.current_index lexer.current_index)
+                      (Diagnostic.Message.create "Expected space after line number in directive");
+                  ]
+                ~code:InvalidCharacter Error "Expected space after line number in directive"))
+  | _ -> 
+      Error
+        Diagnostic.(
+          createf
+            ~labels:
+              [
+                Label.primary
+                  ~range:(range (get_source lexer) lexer.current_index lexer.current_index)
+                  (Diagnostic.Message.create "Expected digits after # in line number directive");
+              ]
+            ~code:InvalidCharacter Error "Expected digits after # in line number directive")
+
 let rec get_next lexer =
   match get_next_char lexer with
   | Some (char, index) -> (
       match char with
       | '(' -> (
+          lexer.at_line_start <- false;
           match peek_next_char lexer with
           | Some ('*', _) ->
               shift_forward lexer;
               comment lexer index 1 |> Result.bind ~f:(fun () -> get_next lexer)
           | _ -> Ok (Some (s LParen ~start_index:index ~end_index:index)))
-      | ')' -> Ok (Some (s RParen ~start_index:index ~end_index:index))
-      | '+' -> Ok (Some (s Plus ~start_index:index ~end_index:index))
-      | '-' -> Ok (Some (s Minus ~start_index:index ~end_index:index))
-      | ' ' | '\n' | '\t' | '\r' -> get_next lexer
-      | '\'' -> char_literal lexer index
-      | '"' -> string_literal lexer index
-      | '~' -> label_or_operator lexer index ~fallback:Tilde
-      | '?' -> label_or_operator lexer index ~fallback:Question
+      | ')' -> 
+          lexer.at_line_start <- false;
+          Ok (Some (s RParen ~start_index:index ~end_index:index))
+      | '[' -> 
+          lexer.at_line_start <- false;
+          Ok (Some (s LBracket ~start_index:index ~end_index:index))
+      | ']' -> 
+          lexer.at_line_start <- false;
+          Ok (Some (s RBracket ~start_index:index ~end_index:index))
+      | '}' -> 
+          lexer.at_line_start <- false;
+          Ok (Some (s RBrace ~start_index:index ~end_index:index))
+      | '+' -> 
+          lexer.at_line_start <- false;
+          Ok (Some (s Plus ~start_index:index ~end_index:index))
+      | ' ' | '\t' | '\r' -> 
+          lexer.at_line_start <- false;
+          get_next lexer
+      | '\n' -> 
+          lexer.at_line_start <- true;
+          get_next lexer
+      | '\'' -> 
+          lexer.at_line_start <- false;
+          char_literal lexer index
+      | '"' -> 
+          lexer.at_line_start <- false;
+          string_literal lexer index
+      | '{' -> 
+          lexer.at_line_start <- false;
+          try_quoted_string_literal lexer index
+      | '~' -> 
+          lexer.at_line_start <- false;
+          label_or_operator lexer index ~fallback:Tilde
+      | '?' -> 
+          lexer.at_line_start <- false;
+          label_or_operator lexer index ~fallback:Question
+      | '#' -> 
+          if lexer.at_line_start then (
+            (* Parse line number directive and treat as whitespace *)
+            parse_linenum_directive lexer index
+            |> Result.bind ~f:(fun () -> get_next lexer)
+          ) else (
+            (* Regular # as part of infix operator *)
+            lexer.at_line_start <- false;
+            shift_back lexer;
+            infix_symbol lexer index
+          )
+      | '&' -> (
+          lexer.at_line_start <- false;
+          match peek_next_char lexer with
+          | Some ('&', _) ->
+              shift_forward lexer;
+              Ok (Some (s AndAnd ~start_index:index ~end_index:index))
+          | _ -> Ok (Some (s And ~start_index:index ~end_index:index)))
+      | ',' -> 
+          lexer.at_line_start <- false;
+          Ok (Some (s Comma ~start_index:index ~end_index:index))
+      | '-' -> (
+          lexer.at_line_start <- false;
+          match peek_next_char lexer with
+          | Some ('.', _) ->
+              shift_forward lexer;
+              Ok (Some (s MinusDot ~start_index:index ~end_index:(lexer.current_index - 1)))
+          | Some ('>', _) ->
+              shift_forward lexer;
+              Ok (Some (s RightArrow ~start_index:index ~end_index:(lexer.current_index - 1)))
+          | _ -> Ok (Some (s Minus ~start_index:index ~end_index:index)))
+      | '.' -> (
+          lexer.at_line_start <- false;
+          match peek_next_char lexer with
+          | Some ('.', _) ->
+              shift_forward lexer;
+              Ok (Some (s DotDot ~start_index:index ~end_index:index))
+          | Some ('~', _) ->
+              shift_forward lexer;
+              Ok (Some (s DotTilde ~start_index:index ~end_index:index))
+          | _ -> Ok (Some (s Dot ~start_index:index ~end_index:index)))
+      | ':' -> (
+          lexer.at_line_start <- false;
+          match peek_next_char lexer with
+          | Some (':', _) ->
+              shift_forward lexer;
+              Ok (Some (s ColonColon ~start_index:index ~end_index:index))
+          | Some ('=', _) ->
+              shift_forward lexer;
+              Ok (Some (s ColonEq ~start_index:index ~end_index:index))
+          | Some ('>', _) ->
+              shift_forward lexer;
+              Ok (Some (s RightArrow ~start_index:index ~end_index:index))
+          | _ ->
+              Ok (Some (s ColonRightArrow ~start_index:index ~end_index:index)))
+      | ';' -> (
+          lexer.at_line_start <- false;
+          match peek_next_char lexer with
+          | Some (';', _) ->
+              shift_forward lexer;
+              Ok
+                (Some (s SemicolonSemicolon ~start_index:index ~end_index:index))
+          | _ -> Ok (Some (s Semicolon ~start_index:index ~end_index:index)))
       | c when is_core_operator c || Char.equal c '%' || Char.equal c '<' ->
+          lexer.at_line_start <- false;
+          shift_back lexer;
           infix_symbol lexer index
       | c when Char.is_alpha c || Char.equal c '_' || is_unicode_char c ->
+          lexer.at_line_start <- false;
           Ok (Some (ident lexer index))
       | c when Char.is_digit c ->
+          lexer.at_line_start <- false;
           number c lexer index |> Result.map ~f:(fun token -> Some token)
       | c ->
+          lexer.at_line_start <- false;
           let message =
             Diagnostic.Message.create
               (* TODO: add a better message *)

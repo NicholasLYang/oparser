@@ -7,14 +7,38 @@ type number =
   | NativeInt of nativeint
 
 type token =
+  | MinusDot
+  | NotEq
+  | Hash
+  | AndAnd
+  | Quote
+  | Comma
+  | ColonColon
+  | ColonEq
+  | ColonRightArrow
+  | Semicolon
+  | SemicolonSemicolon
+  | Dot
+  | DotDot
+  | DotTilde
+  | Eq
+  | Gt
+  | Lt
+  | LeftArrow
+  | RightArrow
   | Label of string
   | OptLabel of string
   | InfixOp of string
   | String of string
+  | QuotedString of string
   | Tilde
   | Question
   | LParen
   | RParen
+  | LBracket
+  | RBracket
+  | LBrace
+  | RBrace
   | Plus
   | Minus
   | Ident of string
@@ -93,6 +117,7 @@ let keyword_of_string = function
   | "external" -> Some External
   | "false" -> Some False
   | "for" -> Some For
+  | "fun" -> Some Fun
   | "functor" -> Some Functor
   | "if" -> Some If
   | "in" -> Some In
@@ -140,14 +165,38 @@ let string_of_number = function
   | NativeInt n -> sprintf "<nativeint> %s" (Nativeint.to_string n)
 
 let string_of_token = function
+  | MinusDot -> "-."
+  | NotEq -> "!="
+  | Hash -> "#"
+  | AndAnd -> "&&"
+  | Quote -> "'"
+  | Comma -> ","
+  | Semicolon -> ";"
+  | SemicolonSemicolon -> ";;"
+  | ColonColon -> "::"
+  | ColonEq -> ":="
+  | ColonRightArrow -> "=>"
+  | Dot -> "."
+  | DotDot -> ".."
+  | DotTilde -> ".~"
+  | Eq -> "="
+  | Gt -> ">"
+  | Lt -> "<"
+  | LeftArrow -> "<-"
+  | RightArrow -> "->"
   | Tilde -> "~"
   | Question -> "?"
   | Label content -> sprintf "<label> %s" content
   | OptLabel content -> sprintf "<optlabel> %s" content
   | InfixOp content -> sprintf "<infixop> %s" content
   | String content -> sprintf "<string> %s" content
+  | QuotedString content -> sprintf "<quotedstring> %s" content
   | LParen -> "("
   | RParen -> ")"
+  | LBracket -> "["
+  | RBracket -> "]"
+  | LBrace -> "{"
+  | RBrace -> "}"
   | Plus -> "+"
   | Minus -> "-"
   | Ident content -> sprintf "<ident> %s" content
