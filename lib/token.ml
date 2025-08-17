@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type number =
   | Int of int
@@ -159,10 +159,10 @@ let keyword_of_string = function
   | _ -> None
 
 let string_of_number = function
-  | Int n -> sprintf "<int> %d" n
-  | Int32 n -> sprintf "<int32> %ld" n
-  | Int64 n -> sprintf "<int64> %Ld" n
-  | NativeInt n -> sprintf "<nativeint> %s" (Nativeint.to_string n)
+  | Int n -> Printf.sprintf "<int> %d" n
+  | Int32 n -> Printf.sprintf "<int32> %ld" n
+  | Int64 n -> Printf.sprintf "<int64> %Ld" n
+  | NativeInt n -> Printf.sprintf "<nativeint> %s" (Nativeint.to_string n)
 
 let string_of_token = function
   | MinusDot -> "-."
@@ -186,11 +186,11 @@ let string_of_token = function
   | RightArrow -> "->"
   | Tilde -> "~"
   | Question -> "?"
-  | Label content -> sprintf "<label> %s" content
-  | OptLabel content -> sprintf "<optlabel> %s" content
-  | InfixOp content -> sprintf "<infixop> %s" content
-  | String content -> sprintf "<string> %s" content
-  | QuotedString content -> sprintf "<quotedstring> %s" content
+  | Label content -> Printf.sprintf "<label> %s" content
+  | OptLabel content -> Printf.sprintf "<optlabel> %s" content
+  | InfixOp content -> Printf.sprintf "<infixop> %s" content
+  | String content -> Printf.sprintf "<string> %s" content
+  | QuotedString content -> Printf.sprintf "<quotedstring> %s" content
   | LParen -> "("
   | RParen -> ")"
   | LBracket -> "["
@@ -199,9 +199,9 @@ let string_of_token = function
   | RBrace -> "}"
   | Plus -> "+"
   | Minus -> "-"
-  | Ident content -> sprintf "<ident> %s" content
+  | Ident content -> Printf.sprintf "<ident> %s" content
   | Number number -> string_of_number number
-  | Char c -> sprintf "<char> %c" c
+  | Char c -> Printf.sprintf "<char> %c" c
   | And -> "and"
   | As -> "as"
   | Assert -> "assert"
