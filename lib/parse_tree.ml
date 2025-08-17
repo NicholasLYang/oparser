@@ -142,40 +142,19 @@ and string_of_poly_typexpr = function
 and string_of_method_type { method_name; poly_typexpr } =
   method_name ^ " : " ^ string_of_poly_typexpr poly_typexpr
 
-let string_of_value_path (path_opt, name) =
+(* Generic helper for path string conversion *)
+let string_of_path (path_opt, name) =
   match path_opt with
   | None -> name
   | Some path -> String.concat ~sep:"." path ^ "." ^ name
 
-let string_of_constr_path (path_opt, name) =
-  match path_opt with
-  | None -> name
-  | Some path -> String.concat ~sep:"." path ^ "." ^ name
-
-let string_of_typeconstr_path (path_opt, name) =
-  match path_opt with
-  | None -> name
-  | Some path -> String.concat ~sep:"." path ^ "." ^ name
-
-let string_of_field_path (path_opt, name) =
-  match path_opt with
-  | None -> name
-  | Some path -> String.concat ~sep:"." path ^ "." ^ name
-
-let string_of_modtype_path (path_opt, name) =
-  match path_opt with
-  | None -> name
-  | Some path -> String.concat ~sep:"." path ^ "." ^ name
-
-let string_of_class_path (path_opt, name) =
-  match path_opt with
-  | None -> name
-  | Some path -> String.concat ~sep:"." path ^ "." ^ name
-
-let string_of_classtype_path (path_opt, name) =
-  match path_opt with
-  | None -> name
-  | Some path -> String.concat ~sep:"." path ^ "." ^ name
+let string_of_value_path = string_of_path
+let string_of_constr_path = string_of_path
+let string_of_typeconstr_path = string_of_path
+let string_of_field_path = string_of_path
+let string_of_modtype_path = string_of_path
+let string_of_class_path = string_of_path
+let string_of_classtype_path = string_of_path
 
 let string_of_parse_tree = function
   | TypeExpr t -> "TypeExpr: " ^ string_of_typexpr t

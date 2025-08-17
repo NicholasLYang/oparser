@@ -31,28 +31,22 @@ let ident_char_valid = function
   | '_' | '\'' -> true
   | _ -> false
 
-let validate_ident s =
+(* Generic identifier validation function *)
+let validate_ident_with_predicate ~first_char_pred s =
   if String.is_empty s then false
   else
     let first_char = s.[0] in
-    let first_valid = is_letter first_char || Char.equal first_char '_' in
-    if not first_valid then false
+    if not (first_char_pred first_char) then false
     else String.for_all s ~f:ident_char_valid
+
+let validate_ident s =
+  validate_ident_with_predicate s ~first_char_pred:(fun c -> is_letter c || Char.equal c '_')
 
 let validate_capitalized_ident s =
-  if String.is_empty s then false
-  else
-    let first_char = s.[0] in
-    if not (is_uppercase_letter first_char) then false
-    else String.for_all s ~f:ident_char_valid
+  validate_ident_with_predicate s ~first_char_pred:is_uppercase_letter
 
 let validate_lowercase_ident s =
-  if String.is_empty s then false
-  else
-    let first_char = s.[0] in
-    let first_valid = is_lowercase_letter first_char || Char.equal first_char '_' in
-    if not first_valid then false
-    else String.for_all s ~f:ident_char_valid
+  validate_ident_with_predicate s ~first_char_pred:(fun c -> is_lowercase_letter c || Char.equal c '_')
 
 let validate_prefix_symbol s =
   if String.is_empty s then false
@@ -132,7 +126,6 @@ let parse_method_name = function
   | _ -> Error "Expected method name"
 
 (* Token stream parser utilities *)
-type token_stream = token list
 
 let peek_token = function
   | [] -> None
@@ -224,7 +217,7 @@ let has_module_path tokens =
   | _ -> false
 
 (* Simpler approach: manually parse module.name patterns *)
-let try_parse_with_module_path _parse_path parse_name tokens =
+let try_parse_with_module_path parse_name tokens =
   if has_module_path tokens then
     (* We have Module.Name pattern, parse it manually *)
     match tokens with
@@ -244,10 +237,10 @@ let try_parse_with_module_path _parse_path parse_name tokens =
 
 (* Main path parsers *)
 let parse_value_path tokens =
-  try_parse_with_module_path parse_module_path parse_value_name tokens
+  try_parse_with_module_path parse_value_name tokens
 
 let parse_constr tokens =
-  try_parse_with_module_path parse_module_path parse_constr_name tokens
+  try_parse_with_module_path parse_constr_name tokens
 
 let parse_typeconstr tokens =
   (* Use try_parse_with_module_path but with extended_module_path *)
@@ -272,7 +265,7 @@ let parse_typeconstr tokens =
   | _ -> Error "Expected type constructor name"
 
 let parse_field tokens =
-  try_parse_with_module_path parse_module_path parse_field_name tokens
+  try_parse_with_module_path parse_field_name tokens
 
 let parse_modtype_path tokens =
   (* Use try_parse_with_module_path but with extended_module_path *)
@@ -297,7 +290,7 @@ let parse_modtype_path tokens =
   | _ -> Error "Expected module type name"
 
 let parse_class_path tokens =
-  try_parse_with_module_path parse_module_path parse_class_name tokens
+  try_parse_with_module_path parse_class_name tokens
 
 let parse_classtype_path tokens =
   (* Use try_parse_with_module_path but with extended_module_path *)
@@ -526,12 +519,18 @@ and parse_tuple_continuation acc tokens =
            if List.length acc > 1 then
              Ok (make_tuple (List.rev acc), tokens)
            else
-             Ok (List.hd_exn acc, tokens))
+             (match acc with
+              | [single] -> Ok (single, tokens)
+              | [] -> Error "Empty tuple list"
+              | _ -> Ok (make_tuple (List.rev acc), tokens)))
   | _ -> 
       if List.length acc > 1 then
         Ok (make_tuple (List.rev acc), tokens)
       else
-        Ok (List.hd_exn acc, tokens)
+        (match acc with
+         | [single] -> Ok (single, tokens)
+         | [] -> Error "Empty tuple list"
+         | _ -> Ok (make_tuple (List.rev acc), tokens))
 
 (* Parse type applications: typexpr typeconstr | ( typexpr { , typexpr } ) typeconstr *)
 and parse_app_type tokens =
@@ -599,7 +598,7 @@ and parse_parenthesized_type tokens =
            (match peek_token rest' with
             | Some Comma ->
                 (* Multiple types: ( typexpr { , typexpr } ) typeconstr *)
-                (match parse_comma_separated_list parse_typexpr tokens with
+                (match parse_comma_separated_list parse_typexpr rest' with
                  | Ok (types, rest'') ->
                      (match expect_rparen rest'' with
                       | Ok rest''' ->
@@ -713,3 +712,32 @@ and parse_class_type tokens =
            Ok (make_classtype ct_path, rest')
        | Error e -> Error e)
   | _ -> Error "Expected '#'"
+
+(* Lexer integration functions *)
+
+(* Helper function to extract tokens from lexer *)
+let tokens_from_lexer lexer =
+  let rec collect_tokens acc =
+    match Lexer.get_next lexer with
+    | Ok (Some token_spanned) -> collect_tokens (Span.value token_spanned :: acc)
+    | Ok None -> Ok (List.rev acc)  (* EOF reached *)
+    | Error e -> 
+        Lexer.print_error e;
+        Error "Lexer error"
+  in
+  collect_tokens []
+
+(* Main parser function that works with lexer *)
+let parse_from_lexer lexer =
+  match tokens_from_lexer lexer with
+  | Ok tokens -> 
+      (match parse_typexpr tokens with
+       | Ok (ast, []) -> Ok ast  (* Successfully parsed all tokens *)
+       | Ok (_, remaining) -> Error ("Unexpected tokens remaining: " ^ String.concat ~sep:" " (List.map remaining ~f:string_of_token))
+       | Error e -> Error e)
+  | Error e -> Error e
+
+(* Convenience function to parse from string *)
+let parse_string str source =
+  let lexer = Lexer.create str source in
+  parse_from_lexer lexer

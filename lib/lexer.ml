@@ -1,4 +1,4 @@
-open Core
+open Base
 open Grace
 open Span
 open Token
@@ -121,7 +121,7 @@ let make_number lexer ~start_index ~end_index suffix =
   in
   let number =
     match suffix with
-    | `Int -> int_of_string_opt content |> Option.map ~f:(fun n -> Int n)
+    | `Int -> Int.of_string_opt content |> Option.map ~f:(fun n -> Int n)
     | `Int32 -> Int32.of_string_opt content |> Option.map ~f:(fun n -> Int32 n)
     | `Int64 -> Int64.of_string_opt content |> Option.map ~f:(fun n -> Int64 n)
     | `NativeInt ->
@@ -385,7 +385,7 @@ let handle_string_escape lexer start_index buf =
           consume_hex_digits lexer ""
           |> Result.bind ~f:(fun hex ->
                  try
-                   let code = int_of_string ("0x" ^ hex) in
+                   let code = Int.of_string ("0x" ^ hex) in
                    Stdlib.Buffer.add_utf_8_uchar buf (Uchar.of_scalar_exn code);
                    Ok buf
                  with _ ->
@@ -730,7 +730,7 @@ let parse_directive_string_char lexer =
               consume_hex_digits lexer ""
               |> Result.bind ~f:(fun hex ->
                      try
-                       let code = int_of_string ("0x" ^ hex) in
+                       let code = Int.of_string ("0x" ^ hex) in
                        Ok (Char.of_int_exn code)
                      with _ -> 
                        Error
