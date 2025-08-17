@@ -11,10 +11,16 @@ type 'a parse_result = ('a, string) Result.t
 val tokens_from_lexer : Lexer.t -> token list parse_result
 
 (** Parse from a lexer directly *)
-val parse_from_lexer : Lexer.t -> typexpr parse_result
+val parse_from_lexer : Lexer.t -> parse_tree parse_result
 
 (** Parse from a string using the lexer *)
-val parse_string : string -> Grace.Source.t -> typexpr parse_result
+val parse_string : string -> Grace.Source.t -> parse_tree parse_result
+
+(** Parse constants specifically *)
+val parse_constant_from_lexer : Lexer.t -> constant parse_result
+
+(** Parse constant from string *)
+val parse_constant_string : string -> Grace.Source.t -> constant parse_result
 
 (** Low-level token parsing functions *)
 
@@ -96,3 +102,11 @@ val parse_poly_typexpr : token list -> (poly_typexpr * token list) parse_result
 
 (** Parse method type *)
 val parse_method_type : token list -> (method_type * token list) parse_result
+
+(** Constant parsing functions *)
+
+(** Parse single constant token *)
+val parse_constant : token -> constant parse_result
+
+(** Parse constant from token list *)
+val parse_constant_tokens : token list -> (constant * token list) parse_result

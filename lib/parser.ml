@@ -316,6 +316,117 @@ let parse_classtype_path tokens =
 
 (* Type expression parsing *)
 
+(* Syntax forms supported by this parser:
+ *
+ * Primary Types:
+ * - Type variables: 'a, 'b, 'var
+ * - Wildcards: _
+ * - Type constructors: int, string, list
+ * - Parenthesized types: (int)
+ * - Object types: < method1 : int; method2 : string >, < .. >
+ * - Class types: #class_name
+ *
+ * Type Applications:
+ * - Simple application: 'a list
+ * - Multi-parameter application: ('a, 'b) result
+ * - Class type application: 'a #class
+ *
+ * Composite Types:
+ * - Tuple types: int * string * bool
+ * - Arrow types: int -> string
+ * - Labeled arrows: label:int -> string
+ * - Optional labeled arrows: ?label:int -> string
+ * - Type aliases with 'as': 'a as 'x
+ *
+ * Polymorphic Types:
+ * - Universal quantification: 'a 'b. 'a -> 'b
+ * - Method types in objects: method_name : poly_typexpr
+ *
+ * Module-qualified names:
+ * - Simple module paths: Module.type_name
+ * - Extended module paths: Module(Path).type_name
+ * - Nested module access: A.B.C.type_name
+ */
+
+(* Constant parsing *)
+
+let parse_constant = function
+  | Number (Int i) -> Ok (make_integer_literal i)
+  | Number (Int32 i) -> Ok (make_int32_literal i) 
+  | Number (Int64 i) -> Ok (make_int64_literal i)
+  | Number (NativeInt i) -> Ok (make_nativeint_literal i)
+  | Number (Float f) -> Ok (make_float_literal f)
+  | Char c -> Ok (make_char_literal c)
+  | String s -> Ok (make_string_literal s)
+  | Ident name when validate_capitalized_ident name -> Ok (make_constructor name)
+  | False -> Ok (make_false ())
+  | True -> Ok (make_true ())
+  | PolymorphicVariantTag tag -> Ok (make_polymorphic_variant_tag tag)
+  | _ -> Error "Expected constant"
+
+(* Parse compound constants that require multiple tokens *)
+let parse_unit_constant tokens =
+  match consume_token tokens with
+  | (Some LParen, rest) ->
+      (match consume_token rest with
+       | (Some RParen, rest') -> Ok (make_unit (), rest')
+       | _ -> Error "Expected ')' to complete unit constant")
+  | _ -> Error "Expected '(' to start unit constant"
+
+let parse_begin_end_constant tokens =
+  match consume_token tokens with
+  | (Some Begin, rest) ->
+      (match consume_token rest with
+       | (Some End, rest') -> Ok (make_begin_end (), rest')
+       | _ -> Error "Expected 'end' to complete begin end constant")
+  | _ -> Error "Expected 'begin' to start begin end constant"
+
+let parse_empty_list_constant tokens =
+  match consume_token tokens with
+  | (Some LBracket, rest) ->
+      (match consume_token rest with
+       | (Some RBracket, rest') -> Ok (make_empty_list (), rest')
+       | _ -> Error "Expected ']' to complete empty list constant")
+  | _ -> Error "Expected '[' to start empty list constant"
+
+let parse_empty_array_constant tokens =
+  match consume_token tokens with
+  | (Some LBracket, rest) ->
+      (match consume_token rest with
+       | (Some Or, rest') ->
+           (match consume_token rest' with
+            | (Some Or, rest'') ->
+                (match consume_token rest'' with
+                 | (Some RBracket, rest''') -> Ok (make_empty_array (), rest''')
+                 | _ -> Error "Expected ']' to complete empty array constant")
+            | _ -> Error "Expected second '|' in empty array constant")
+       | _ -> Error "Expected '|' after '[' in empty array constant")
+  | _ -> Error "Expected '[' to start empty array constant"
+
+(* Parse a complete constant from token list *)
+let parse_constant_tokens tokens =
+  match peek_token tokens with
+  | Some LParen ->
+      parse_unit_constant tokens
+  | Some Begin ->
+      parse_begin_end_constant tokens
+  | Some LBracket ->
+      (* Could be empty list [] or empty array [||] *)
+      (match tokens with
+       | LBracket :: RBracket :: _ ->
+           parse_empty_list_constant tokens
+       | LBracket :: Or :: Or :: RBracket :: _ ->
+           parse_empty_array_constant tokens
+       | _ -> Error "Invalid list/array constant")
+  | Some token ->
+      (match consume_token tokens with
+       | (Some token, rest) ->
+           (match parse_constant token with
+            | Ok constant -> Ok (constant, rest)
+            | Error e -> Error e)
+       | _ -> Error "Expected constant token")
+  | None -> Error "Expected constant token"
+
 (* Helper function to parse comma-separated list *)
 let rec parse_comma_separated_list parse_fn tokens =
   match parse_fn tokens with
@@ -335,7 +446,9 @@ and parse_comma_separated_continuation parse_fn acc tokens =
        | _ -> Ok (List.rev acc, tokens))
   | _ -> Ok (List.rev acc, tokens)
 
-(* Parse method type: method-name : poly-typexpr *)
+(* Parse method type: method-name : poly-typexpr
+ * Syntax: method_name : typexpr | method_name : 'a 'b. typexpr
+ *)
 let rec parse_method_type tokens =
   match consume_token tokens with
   | (Some (Ident name), rest) when validate_lowercase_ident name ->
@@ -353,7 +466,11 @@ and expect_colon tokens =
   | (Some (InfixOp ":"), rest) -> Ok rest
   | _ -> Error "Expected ':'"
 
-(* Parse poly-typexpr: typexpr | { ' ident }+ . typexpr *)
+(* Parse poly-typexpr: typexpr | { ' ident }+ . typexpr
+ * Syntax: 
+ * - Simple type: int
+ * - Polymorphic type: 'a 'b. 'a -> 'b
+ *)
 and parse_poly_typexpr tokens =
   (* Check if we have type variables *)
   if has_type_variables tokens then
@@ -402,11 +519,23 @@ and parse_type_variable_continuation acc tokens =
        | _ -> Ok (List.rev acc, tokens))
   | _ -> Ok (List.rev acc, tokens)
 
-(* Main typexpr parser with precedence *)
-and parse_typexpr tokens =
+(* Main typexpr parser with precedence
+ * Grammar hierarchy (highest to lowest precedence):
+ * 1. Primary types (variables, constructors, parentheses, objects, classes)
+ * 2. Type applications ('a list)
+ * 3. Tuple types (int * string)
+ * 4. Type aliases with 'as' ('a as 'x)
+ * 5. Arrow types (int -> string, with labeled/optional variants)
+ *)
+let rec parse_typexpr tokens =
   parse_arrow_type tokens
 
-(* Parse arrow types (lowest precedence): typexpr -> typexpr *)
+(* Parse arrow types (lowest precedence): typexpr -> typexpr
+ * Syntax:
+ * - Simple arrow: int -> string
+ * - Labeled arrow: label:int -> string  
+ * - Optional labeled arrow: ?label:int -> string
+ *)
 and parse_arrow_type tokens =
   match parse_as_type tokens with
   | Ok (left, rest) ->
@@ -480,7 +609,9 @@ and expect_right_arrow tokens =
   | (Some RightArrow, rest) -> Ok rest
   | _ -> Error "Expected '->'"
 
-(* Parse 'as' types: typexpr as ' ident *)
+(* Parse 'as' types: typexpr as ' ident
+ * Syntax: 'a list as 'my_type
+ *)
 and parse_as_type tokens =
   match parse_tuple_type tokens with
   | Ok (t, rest) ->
@@ -499,7 +630,9 @@ and parse_as_type tokens =
        | _ -> Ok (t, rest))
   | Error e -> Error e
 
-(* Parse tuple types: typexpr { * typexpr }+ *)
+(* Parse tuple types: typexpr { * typexpr }+
+ * Syntax: int * string * bool (two or more types separated by *)
+ *)
 and parse_tuple_type tokens =
   match parse_app_type tokens with
   | Ok (first, rest) ->
@@ -532,7 +665,12 @@ and parse_tuple_continuation acc tokens =
          | [] -> Error "Empty tuple list"
          | _ -> Ok (make_tuple (List.rev acc), tokens))
 
-(* Parse type applications: typexpr typeconstr | ( typexpr { , typexpr } ) typeconstr *)
+(* Parse type applications: typexpr typeconstr | ( typexpr { , typexpr } ) typeconstr
+ * Syntax:
+ * - Single parameter: 'a list
+ * - Multiple parameters: ('a, 'b) result
+ * - Class type application: 'a #class
+ *)
 and parse_app_type tokens =
   match parse_primary_type tokens with
   | Ok (t, rest) ->
@@ -558,7 +696,15 @@ and parse_app_continuation t tokens =
        | _ -> Ok (t, tokens))
   | _ -> Ok (t, tokens)
 
-(* Parse primary types: atoms and parenthesized expressions *)
+(* Parse primary types: atoms and parenthesized expressions
+ * Syntax:
+ * - Type variables: 'a, 'var
+ * - Wildcards: _
+ * - Type constructors: int, string, Module.type_name
+ * - Parenthesized: (int), (int * string)
+ * - Object types: < method : int >, < .. >
+ * - Class types: #class_name, #Module.class_name
+ *)
 and parse_primary_type tokens =
   match peek_token tokens with
   | Some Quote ->
@@ -624,6 +770,13 @@ and parse_type_constructor tokens =
       Ok ((None, name), rest)
   | _ -> Error "Expected type constructor"
 
+(* Parse object types: < method-list > | < .. >
+ * Syntax:
+ * - Empty object: < .. >
+ * - Object with methods: < method1 : int; method2 : string >
+ * - Object with trailing semicolon: < method : int; >
+ * - Object with open type: < method : int; .. >
+ *)
 and parse_object_type tokens =
   match consume_token tokens with
   | (Some Lt, rest) ->
@@ -704,6 +857,9 @@ and expect_gt tokens =
   | (Some Gt, rest) -> Ok rest
   | _ -> Error "Expected '>'"
 
+(* Parse class types: # class-path
+ * Syntax: #class_name, #Module.class_name
+ *)
 and parse_class_type tokens =
   match consume_token tokens with
   | (Some Hash, rest) ->
@@ -732,12 +888,31 @@ let parse_from_lexer lexer =
   match tokens_from_lexer lexer with
   | Ok tokens -> 
       (match parse_typexpr tokens with
-       | Ok (ast, []) -> Ok ast  (* Successfully parsed all tokens *)
+       | Ok (ast, []) -> Ok (TypeExpr ast)  (* Successfully parsed all tokens as type expression *)
        | Ok (_, remaining) -> Error ("Unexpected tokens remaining: " ^ String.concat ~sep:" " (List.map remaining ~f:string_of_token))
-       | Error e -> Error e)
+       | Error _ ->
+           (* Try parsing as constant if type expression parsing failed *)
+           (match parse_constant_tokens tokens with
+            | Ok (constant, []) -> Ok (Constant constant)  (* Successfully parsed all tokens as constant *)
+            | Ok (_, remaining) -> Error ("Unexpected tokens remaining: " ^ String.concat ~sep:" " (List.map remaining ~f:string_of_token))
+            | Error e -> Error e))
   | Error e -> Error e
 
 (* Convenience function to parse from string *)
 let parse_string str source =
   let lexer = Lexer.create str source in
   parse_from_lexer lexer
+
+(* Specific parsing functions for constants *)
+let parse_constant_from_lexer lexer =
+  match tokens_from_lexer lexer with
+  | Ok tokens -> 
+      (match parse_constant_tokens tokens with
+       | Ok (constant, []) -> Ok constant  (* Successfully parsed all tokens *)
+       | Ok (_, remaining) -> Error ("Unexpected tokens remaining: " ^ String.concat ~sep:" " (List.map remaining ~f:string_of_token))
+       | Error e -> Error e)
+  | Error e -> Error e
+
+let parse_constant_string str source =
+  let lexer = Lexer.create str source in
+  parse_constant_from_lexer lexer

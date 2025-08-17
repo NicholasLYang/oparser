@@ -126,6 +126,7 @@ let make_number lexer ~start_index ~end_index suffix =
     | `Int64 -> Int64.of_string_opt content |> Option.map ~f:(fun n -> Int64 n)
     | `NativeInt ->
         Nativeint.of_string_opt content |> Option.map ~f:(fun n -> NativeInt n)
+    | `Float -> Float.of_string_opt content |> Option.map ~f:(fun f -> Float f)
   in
   match number with
   | Some number -> Ok (s (Number number) ~start_index ~end_index)
@@ -198,7 +199,71 @@ let binary_number lexer start = parse_number_with_predicate lexer start is_binar
 
 let is_decimal_digit c = Char.is_digit c || Char.equal c '_'
 
-let decimal_number lexer start = parse_number_with_predicate lexer start is_decimal_digit
+(* Enhanced decimal number parsing that handles both integers and floats *)
+let decimal_number lexer start =
+  (* First parse the integer part *)
+  let rec parse_integer_part () =
+    match get_next_char lexer with
+    | Some (c, _) when is_decimal_digit c -> parse_integer_part ()
+    | Some ('.', _) ->
+        (* Check if this is really a float (not followed by another .) *)
+        (match peek_next_char lexer with
+        | Some ('.', _) ->
+            (* This is .. so backtrack and treat as integer *)
+            shift_back lexer;
+            shift_back lexer;
+            let suffix = number_suffix lexer in
+            make_number lexer ~start_index:start ~end_index:(lexer.current_index - 1) suffix
+        | Some (c, _) when Char.is_digit c ->
+            (* This is a float - parse fractional part *)
+            parse_fractional_part ()
+        | _ ->
+            (* Dot not followed by digit, treat as integer *)
+            shift_back lexer;
+            let suffix = number_suffix lexer in
+            make_number lexer ~start_index:start ~end_index:(lexer.current_index - 1) suffix)
+    | Some (c, _) when Char.equal c 'e' || Char.equal c 'E' ->
+        (* Parse exponent *)
+        parse_exponent ()
+    | Some (_, index) ->
+        shift_back lexer;
+        let suffix = number_suffix lexer in
+        make_number lexer ~start_index:start ~end_index:(index - 1) suffix
+    | None ->
+        make_number lexer ~start_index:start ~end_index:(lexer.current_index - 1) `Int
+  and parse_fractional_part () =
+    (* Parse digits after decimal point *)
+    let rec parse_frac_digits () =
+      match get_next_char lexer with
+      | Some (c, _) when Char.is_digit c -> parse_frac_digits ()
+      | Some (c, _) when Char.equal c 'e' || Char.equal c 'E' ->
+          parse_exponent ()
+      | Some (_, _) ->
+          shift_back lexer;
+          make_number lexer ~start_index:start ~end_index:(lexer.current_index - 1) `Float
+      | None ->
+          make_number lexer ~start_index:start ~end_index:(lexer.current_index - 1) `Float
+    in
+    parse_frac_digits ()
+  and parse_exponent () =
+    (* Parse optional +/- *)
+    (match get_next_char lexer with
+    | Some ('+', _) | Some ('-', _) -> ()
+    | Some (_, _) -> shift_back lexer
+    | None -> ());
+    (* Parse exponent digits *)
+    let rec parse_exp_digits () =
+      match get_next_char lexer with
+      | Some (c, _) when Char.is_digit c -> parse_exp_digits ()
+      | Some (_, _) ->
+          shift_back lexer;
+          make_number lexer ~start_index:start ~end_index:(lexer.current_index - 1) `Float
+      | None ->
+          make_number lexer ~start_index:start ~end_index:(lexer.current_index - 1) `Float
+    in
+    parse_exp_digits ()
+  in
+  parse_integer_part ()
 
 let number first_char lexer start =
   if Char.equal first_char '0' then (
@@ -784,6 +849,33 @@ let parse_directive_string_char lexer =
             ~code:InvalidCharacter Error "Unexpected end of directive string")
 
 (* Parse line number directive: # digits " string " *)
+(* Parse polymorphic variant tag: `tag_name *)
+let polymorphic_variant_tag lexer start_index =
+  (* We've already seen the ` character *)
+  let rec consume_tag_chars acc =
+    match peek_next_char lexer with
+    | Some (c, _) when Char.is_alphanum c || Char.equal c '_' ->
+        shift_forward lexer;
+        consume_tag_chars (acc ^ String.make 1 c)
+    | _ -> acc
+  in
+  
+  match peek_next_char lexer with
+  | Some (c, _) when Char.is_alpha c || Char.equal c '_' ->
+      let tag_name = consume_tag_chars "" in
+      Ok (Some (s (PolymorphicVariantTag tag_name) ~start_index ~end_index:(lexer.current_index - 1)))
+  | _ ->
+      Error
+        Diagnostic.(
+          createf
+            ~labels:
+              [
+                Label.primary
+                  ~range:(range (get_source lexer) start_index lexer.current_index)
+                  (Diagnostic.Message.create "Expected tag name after `");
+              ]
+            ~code:InvalidCharacter Error "Expected tag name after `")
+
 let parse_linenum_directive lexer start_index =
   (* We've already seen the # character *)
   
@@ -1002,6 +1094,9 @@ let rec get_next lexer =
       | c when Char.is_digit c ->
           lexer.at_line_start <- false;
           number c lexer index |> Result.map ~f:(fun token -> Some token)
+      | '`' ->
+          lexer.at_line_start <- false;
+          polymorphic_variant_tag lexer index
       | c ->
           lexer.at_line_start <- false;
           let message =

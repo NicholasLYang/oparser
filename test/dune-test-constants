@@ -1,0 +1,4 @@
+(executable
+ (public_name test_constants_simple)
+ (name test_constants_simple)
+ (libraries oparser base stdio))

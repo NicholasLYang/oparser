@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(rg:*)",
-      "Bash(ocamlfind ocamlc:*)"
+      "Bash(ocamlfind ocamlc:*)",
+      "Bash(find:*)",
+      "Bash(sed:*)"
     ],
     "deny": []
   }

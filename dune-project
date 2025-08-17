@@ -19,7 +19,7 @@
  (name oparser)
  (synopsis "A short synopsis")
  (description "A longer description")
- (depends ocaml grace sedlex)
+ (depends ocaml grace sedlex base stdio sexplib ppx_sexp_conv ppx_jane)
  (tags
   ("add topics" "to describe" your project)))
 

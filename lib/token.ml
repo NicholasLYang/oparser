@@ -5,6 +5,7 @@ type number =
   | Int32 of int32
   | Int64 of int64
   | NativeInt of nativeint
+  | Float of float
 
 type token =
   | MinusDot
@@ -44,6 +45,7 @@ type token =
   | Ident of string
   | Number of number
   | Char of char
+  | PolymorphicVariantTag of string
   | And
   | As
   | Assert
@@ -163,6 +165,7 @@ let string_of_number = function
   | Int32 n -> Printf.sprintf "<int32> %ld" n
   | Int64 n -> Printf.sprintf "<int64> %Ld" n
   | NativeInt n -> Printf.sprintf "<nativeint> %s" (Nativeint.to_string n)
+  | Float f -> Printf.sprintf "<float> %g" f
 
 let string_of_token = function
   | MinusDot -> "-."
@@ -202,6 +205,7 @@ let string_of_token = function
   | Ident content -> Printf.sprintf "<ident> %s" content
   | Number number -> string_of_number number
   | Char c -> Printf.sprintf "<char> %c" c
+  | PolymorphicVariantTag tag -> Printf.sprintf "<polymorphicvarianttag> `%s" tag
   | And -> "and"
   | As -> "as"
   | Assert -> "assert"
