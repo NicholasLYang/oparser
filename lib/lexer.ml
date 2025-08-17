@@ -14,6 +14,27 @@ let range source start stop =
 
 let get_source lexer = lexer.source
 
+(* Helper functions for error creation *)
+let create_diagnostic_error ~source ~start_index ~end_index ~message ~code =
+  Diagnostic.(
+    createf
+      ~labels:
+        [
+          Label.primary
+            ~range:(range source start_index end_index)
+            (Diagnostic.Message.create message);
+        ]
+      ~code Error "%s" message)
+
+let create_point_error ~lexer ~index ~message ~code =
+  create_diagnostic_error ~source:(get_source lexer) ~start_index:index ~end_index:(index + 1) ~message ~code
+
+let create_range_error ~lexer ~start_index ~end_index ~message ~code =
+  create_diagnostic_error ~source:(get_source lexer) ~start_index ~end_index ~message ~code
+
+let create_current_pos_error ~lexer ~message ~code =
+  create_diagnostic_error ~source:(get_source lexer) ~start_index:lexer.current_index ~end_index:lexer.current_index ~message ~code
+
 (* Moves the current index forward by 1. 
   
   NOTE: should not be used unless you are peeking
@@ -91,20 +112,8 @@ let rec comment lexer start_index nesting_level =
       | _ -> comment lexer start_index nesting_level)
   | Some (_, _) -> comment lexer start_index nesting_level
   | None ->
-      let message =
-        Diagnostic.Message.create "Comment begins here and is not terminated"
-      in
-      Error
-        Diagnostic.(
-          createf
-            ~labels:
-              [
-                Label.primary
-                  ~range:
-                    (range (get_source lexer) start_index lexer.current_index)
-                  message;
-              ]
-            ~code:InvalidCharacter Error "Comment is not terminated")
+      let message = "Comment begins here and is not terminated" in
+      Error (create_range_error ~lexer ~start_index ~end_index:lexer.current_index ~message ~code:InvalidCharacter)
 
 let make_number lexer ~start_index ~end_index suffix =
   let content =
@@ -121,16 +130,30 @@ let make_number lexer ~start_index ~end_index suffix =
   match number with
   | Some number -> Ok (s (Number number) ~start_index ~end_index)
   | None ->
-      Error
-        Diagnostic.(
-          createf ~labels:[] ~code:InvalidCharacter Error "Invalid number %s"
-            content)
+      Error (create_current_pos_error ~lexer ~message:("Invalid number " ^ content) ~code:InvalidCharacter)
 
+(* Consolidated digit checking functions *)
 let is_hex_digit c =
   Char.is_digit c
   || Char.between c ~high:'f' ~low:'a'
   || Char.between c ~high:'F' ~low:'A'
   || Char.equal c '_'
+
+(* Consolidated hex digit parsing *)
+let read_hex_digit c =
+  if Char.is_digit c then Char.get_digit_exn c
+  else
+    let c = Char.lowercase c in
+    10 + (Char.to_int c - Char.to_int 'a')
+
+let rec read_hex_escape_n lexer count acc =
+  if count <= 0 then acc
+  else
+    match peek_next_char lexer with
+    | Some (c, _) when is_hex_digit c && not (Char.equal c '_') ->
+        shift_forward lexer;
+        read_hex_escape_n lexer (count - 1) ((acc * 16) + read_hex_digit c)
+    | _ -> acc
 
 let number_suffix lexer =
   match get_next_char lexer with
@@ -142,33 +165,24 @@ let number_suffix lexer =
       `Int
   | None -> `Int
 
-let rec hex_number lexer start =
+(* Consolidated number parsing logic *)
+let rec parse_number_with_predicate lexer start predicate =
   match get_next_char lexer with
-  | Some (c, _) when is_hex_digit c -> hex_number lexer start
+  | Some (c, _) when predicate c -> parse_number_with_predicate lexer start predicate
   | Some (_, index) ->
       shift_back lexer;
       let suffix = number_suffix lexer in
       make_number lexer ~start_index:start ~end_index:(index - 1) suffix
   | None ->
-      make_number lexer ~start_index:start ~end_index:(lexer.current_index - 1)
-        `Int
+      make_number lexer ~start_index:start ~end_index:(lexer.current_index - 1) `Int
+
+let hex_number lexer start = parse_number_with_predicate lexer start is_hex_digit
 
 let check_first_digit lexer =
   match peek_next_char lexer with
   | Some ('_', index) ->
-      let message =
-        Diagnostic.Message.create "`_` found in the first position of a number"
-      in
-      Error
-        Diagnostic.(
-          createf
-            ~labels:
-              [
-                Label.primary
-                  ~range:(range (get_source lexer) index (index + 1))
-                  message;
-              ]
-            ~code:InvalidCharacter Error "Numbers cannot start with `_`")
+      let message = "Numbers cannot start with `_`" in
+      Error (create_point_error ~lexer ~index ~message ~code:InvalidCharacter)
   | _ -> Ok ()
 
 let zero = Char.to_int '0'
@@ -176,42 +190,15 @@ let zero = Char.to_int '0'
 let is_octal_digit c =
   Int.between (Char.to_int c) ~low:zero ~high:(zero + 7) || Char.equal c '_'
 
-let rec octal_number lexer start =
-  match get_next_char lexer with
-  | Some (c, _) when is_octal_digit c -> octal_number lexer start
-  | Some (_, index) ->
-      shift_back lexer;
-      let suffix = number_suffix lexer in
-      make_number lexer ~start_index:start ~end_index:(index - 1) suffix
-  | None ->
-      make_number lexer ~start_index:start ~end_index:(lexer.current_index - 1)
-        `Int
+let octal_number lexer start = parse_number_with_predicate lexer start is_octal_digit
 
 let is_binary_digit c = Char.equal c '0' || Char.equal c '1' || Char.equal c '_'
 
-let rec binary_number lexer start =
-  match get_next_char lexer with
-  | Some (c, _) when is_binary_digit c -> binary_number lexer start
-  | Some (_, index) ->
-      shift_back lexer;
-      let suffix = number_suffix lexer in
-      make_number lexer ~start_index:start ~end_index:(index - 1) suffix
-  | None ->
-      make_number lexer ~start_index:start ~end_index:(lexer.current_index - 1)
-        `Int
+let binary_number lexer start = parse_number_with_predicate lexer start is_binary_digit
 
 let is_decimal_digit c = Char.is_digit c || Char.equal c '_'
 
-let rec decimal_number lexer start =
-  match get_next_char lexer with
-  | Some (c, _) when is_decimal_digit c -> decimal_number lexer start
-  | Some (_, index) ->
-      shift_back lexer;
-      let suffix = number_suffix lexer in
-      make_number lexer ~start_index:start ~end_index:(index - 1) suffix
-  | None ->
-      make_number lexer ~start_index:start ~end_index:(lexer.current_index - 1)
-        `Int
+let decimal_number lexer start = parse_number_with_predicate lexer start is_decimal_digit
 
 let number first_char lexer start =
   if Char.equal first_char '0' then (
@@ -244,40 +231,24 @@ let number first_char lexer start =
     shift_back lexer;
     decimal_number lexer start)
 
-let rec read_decimal_escape lexer count acc =
+(* Consolidated escape parsing functions *)
+let rec read_escape_with_base lexer count acc base digit_predicate digit_converter =
   if count <= 0 then acc
   else
     match peek_next_char lexer with
-    | Some (c, _) when Char.is_digit c ->
+    | Some (c, _) when digit_predicate c ->
         shift_forward lexer;
-        read_decimal_escape lexer (count - 1) ((acc * 10) + Char.get_digit_exn c)
+        read_escape_with_base lexer (count - 1) ((acc * base) + digit_converter c) base digit_predicate digit_converter
     | _ -> acc
 
-let rec read_hex_escape lexer count acc =
-  if count <= 0 then acc
-  else
-    match peek_next_char lexer with
-    | Some (c, _)
-      when Char.is_digit c
-           || (Char.is_alpha c && String.contains "abcdefABCDEF" c) ->
-        shift_forward lexer;
-        let digit =
-          if Char.is_digit c then Char.get_digit_exn c
-          else
-            let c = Char.lowercase c in
-            10 + (Char.to_int c - Char.to_int 'a')
-        in
-        read_hex_escape lexer (count - 1) ((acc * 16) + digit)
-    | _ -> acc
+let read_decimal_escape lexer count acc =
+  read_escape_with_base lexer count acc 10 Char.is_digit Char.get_digit_exn
 
-let rec read_octal_escape lexer count acc =
-  if count <= 0 then acc
-  else
-    match peek_next_char lexer with
-    | Some (c, _) when Char.is_digit c && Char.get_digit_exn c < 8 ->
-        shift_forward lexer;
-        read_octal_escape lexer (count - 1) ((acc * 8) + Char.get_digit_exn c)
-    | _ -> acc
+
+let is_octal_digit_strict c = Char.is_digit c && Char.get_digit_exn c < 8
+
+let read_octal_escape lexer count acc =
+  read_escape_with_base lexer count acc 8 is_octal_digit_strict Char.get_digit_exn
 
 let char_escape lexer =
   match peek_next_char lexer with
@@ -293,7 +264,7 @@ let char_escape lexer =
       Ok c
   | Some ('x', _) ->
       shift_forward lexer;
-      let c = read_hex_escape lexer 2 0 in
+      let c = read_hex_escape_n lexer 2 0 in
       Ok (Char.of_int_exn c)
   | Some ('o', _) ->
       shift_forward lexer;
@@ -379,40 +350,14 @@ let char_literal lexer start_index =
       shift_forward lexer;
       char_escape lexer |> Result.bind ~f:(end_char_literal lexer start_index)
   | Some ('\'', index) ->
-      let message =
-        Diagnostic.Message.create "character literal cannot be empty"
-      in
-      Error
-        Diagnostic.(
-          createf
-            ~labels:
-              [
-                Label.primary
-                  ~range:(range (get_source lexer) index (index + 1))
-                  message;
-              ]
-            ~code:EmptyCharacterLiteral Error
-            "Empty character literal, did you forget to include a character?")
+      let message = "character literal cannot be empty" in
+      Error (create_point_error ~lexer ~index ~message ~code:EmptyCharacterLiteral)
   | _ ->
       (match get_next_char lexer with
       | Some (c, _) -> Ok c
       | None ->
-          let message =
-            Diagnostic.Message.create
-              "expected character literal, instead found the end of the file"
-          in
-          Error
-            Diagnostic.(
-              createf
-                ~labels:
-                  [
-                    Label.primary
-                      ~range:
-                        (range (get_source lexer) lexer.current_index
-                           lexer.current_index)
-                      message;
-                  ]
-                ~code:InvalidCharacter Error "Unexpected character found"))
+          let message = "expected character literal, instead found the end of the file" in
+          Error (create_current_pos_error ~lexer ~message ~code:InvalidCharacter))
       |> Result.bind ~f:(end_char_literal lexer start_index)
 
 let rec consume_hex_digits lexer acc =
@@ -424,31 +369,11 @@ let rec consume_hex_digits lexer acc =
       shift_forward lexer;
       Ok acc
   | Some (_, index) ->
-      Error
-        Diagnostic.(
-          createf
-            ~labels:
-              [
-                Label.primary
-                  ~range:(range (get_source lexer) index (index + 1))
-                  (Diagnostic.Message.create
-                     "Invalid hex digit in unicode escape sequence");
-              ]
-            ~code:InvalidCharacter Error "Invalid unicode escape sequence")
+      let message = "Invalid hex digit in unicode escape sequence" in
+      Error (create_point_error ~lexer ~index ~message ~code:InvalidCharacter)
   | None ->
-      Error
-        Diagnostic.(
-          createf
-            ~labels:
-              [
-                Label.primary
-                  ~range:
-                    (range (get_source lexer) lexer.current_index
-                       lexer.current_index)
-                  (Diagnostic.Message.create
-                     "Unterminated unicode escape sequence");
-              ]
-            ~code:InvalidCharacter Error "Unterminated unicode escape sequence")
+      let message = "Unterminated unicode escape sequence" in
+      Error (create_current_pos_error ~lexer ~message ~code:InvalidCharacter)
 
 let handle_string_escape lexer start_index buf =
   match peek_next_char lexer with
@@ -767,7 +692,7 @@ let parse_directive_string_char lexer =
           | _ -> Ok (Char.of_int_exn c1))
       | Some ('x', _) ->
           shift_forward lexer;
-          let hex1 = read_hex_escape lexer 2 0 in
+          let hex1 = read_hex_escape_n lexer 2 0 in
           Ok (Char.of_int_exn hex1)
       | Some ('o', _) ->
           shift_forward lexer;

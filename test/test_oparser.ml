@@ -55,7 +55,7 @@ let%expect_test _ =
     [1m[91merror[0;1m[0m[1m[91m[E????][0;1m[0m: [1mNumbers cannot start with `_`[0m
         [36m┌─[0m 0xa_bc 1_0 0o10 0b_10:1:19
     [36m  1[0m [36m│[0m  0xa_bc 1_0 0o10 0b[31m_[0m10
-        [36m│[0m                    [31m^[0m [31m`_` found in the first position of a number[0m
+        [36m│[0m                    [31m^[0m [31mNumbers cannot start with `_`[0m
     |}]
 
 let%expect_test _ =
