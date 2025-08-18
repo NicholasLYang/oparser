@@ -44,6 +44,6 @@ let test_constant_creation () =
   printf "\nS-expressions:\n";
   printf "Integer: %s\n" (Sexp.to_string_hum (sexp_of_constant int_const));
   printf "Constructor: %s\n" (Sexp.to_string_hum (sexp_of_constant constr_const));
-  printf "Polymorphic Variant: %s\n" (Sexp.to_string_hum (sexp_of_constant poly_variant_const));
+  printf "Polymorphic Variant: %s\n" (Sexp.to_string_hum (sexp_of_constant poly_variant_const))
 
 let () = test_constant_creation ()

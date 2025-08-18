@@ -4,7 +4,8 @@
       "Bash(rg:*)",
       "Bash(ocamlfind ocamlc:*)",
       "Bash(find:*)",
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "WebFetch(domain:ocaml.org)"
     ],
     "deny": []
   }

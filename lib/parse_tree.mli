@@ -86,6 +86,33 @@ and poly_typexpr =
   | MonoType of typexpr  (** typexpr *)
   | PolyType of ident list * typexpr  (** { ' ident }+ . typexpr *)
 
+(** {1 Pattern expressions} *)
+
+type pattern =
+  | ValueName of value_name  (** value-name *)
+  | PatternWildcard  (** _ *)
+  | PatternConstant of constant  (** constant *)
+  | PatternAlias of pattern * value_name  (** pattern as value-name *)
+  | PatternConstructor of constr_path  (** constr *)
+  | ConstructorPattern of constr_path * pattern  (** constr pattern *)
+  | TuplePattern of pattern list  (** pattern { , pattern }+ *)
+  | ConsPattern of pattern * pattern  (** pattern :: pattern *)
+  | ListPattern of pattern list  (** [pattern {; pattern}*] *)
+  | RecordPattern of record_pattern_field list * bool  (** {field-name=pattern; ...} [; _] *)
+  | ArrayPattern of pattern list  (** [|pattern {; pattern}*|] *)
+  | RangePattern of char * char  (** 'a'..'z' *)
+  | LazyPattern of pattern  (** lazy pattern *)
+  | ExceptionPattern of pattern  (** exception pattern *)
+  | OrPattern of pattern * pattern  (** pattern | pattern *)
+  | ParenthesizedPattern of pattern  (** ( pattern ) *)
+[@@deriving sexp]
+
+and record_pattern_field = {
+  field_name : field_path;
+  pattern : pattern
+}
+[@@deriving sexp]
+
 (** {1 Complete parse tree type} *)
 
 type parse_tree =
@@ -100,6 +127,8 @@ type parse_tree =
   | ClassPath of class_path
   | ClassTypePath of classtype_path
   | Constant of constant
+  | Pattern of pattern
+[@@deriving sexp]
 
 (** {1 Pretty printing functions} *)
 
@@ -115,6 +144,8 @@ val string_of_class_path : class_path -> string
 val string_of_classtype_path : classtype_path -> string
 val string_of_parse_tree : parse_tree -> string
 val string_of_constant : constant -> string
+val string_of_pattern : pattern -> string
+val string_of_record_pattern_field : record_pattern_field -> string
 
 (** {1 Helper functions for creating parse tree nodes} *)
 
@@ -156,3 +187,23 @@ val make_begin_end : unit -> constant
 val make_empty_list : unit -> constant
 val make_empty_array : unit -> constant
 val make_polymorphic_variant_tag : tag_name -> constant
+
+(** {1 Helper functions for creating pattern nodes} *)
+
+val make_value_name_pattern : value_name -> pattern
+val make_wildcard_pattern : unit -> pattern
+val make_pattern_constant : constant -> pattern
+val make_pattern_alias : pattern -> value_name -> pattern
+val make_constructor_pattern : constr_path -> pattern
+val make_constructor_pattern_with_arg : constr_path -> pattern -> pattern
+val make_tuple_pattern : pattern list -> pattern
+val make_cons_pattern : pattern -> pattern -> pattern
+val make_list_pattern : pattern list -> pattern
+val make_record_pattern : record_pattern_field list -> bool -> pattern
+val make_array_pattern : pattern list -> pattern
+val make_range_pattern : char -> char -> pattern
+val make_lazy_pattern : pattern -> pattern
+val make_exception_pattern : pattern -> pattern
+val make_or_pattern : pattern -> pattern -> pattern
+val make_parenthesized_pattern : pattern -> pattern
+val make_record_pattern_field : field_path -> pattern -> record_pattern_field

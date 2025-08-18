@@ -1,0 +1,4 @@
+(executable
+ (public_name test_pattern_parser)
+ (name test_pattern_parser)
+ (libraries oparser base))

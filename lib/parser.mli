@@ -110,3 +110,14 @@ val parse_constant : token -> constant parse_result
 
 (** Parse constant from token list *)
 val parse_constant_tokens : token list -> (constant * token list) parse_result
+
+(** Pattern parsing functions *)
+
+(** Parse pattern from lexer *)
+val parse_pattern_from_lexer : Lexer.t -> pattern parse_result
+
+(** Parse pattern from string *)
+val parse_pattern_string : string -> Grace.Source.t -> pattern parse_result
+
+(** Parse pattern from token list *)
+val parse_pattern : token list -> (pattern * token list) parse_result

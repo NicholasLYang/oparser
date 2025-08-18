@@ -314,6 +314,7 @@ let parse_classtype_path tokens =
             | Error _ -> Error "Expected class name"))
   | _ -> Error "Expected class name"
 
+
 (* Type expression parsing *)
 
 (* Syntax forms supported by this parser:
@@ -426,6 +427,413 @@ let parse_constant_tokens tokens =
             | Error e -> Error e)
        | _ -> Error "Expected constant token")
   | None -> Error "Expected constant token"
+
+(* Pattern parsing *)
+
+(* Parse patterns with precedence
+ * Grammar hierarchy (highest to lowest precedence):
+ * 1. Primary patterns (variables, constants, constructors, parentheses, lists, arrays, records)
+ * 2. Constructor applications (Constructor pattern)
+ * 3. Tuple patterns (pattern, pattern, ...)
+ * 4. Cons patterns (pattern :: pattern)
+ * 5. Alias patterns (pattern as name)
+ * 6. Or patterns (pattern | pattern)
+ *)
+
+let rec parse_pattern tokens =
+  parse_or_pattern tokens
+
+(* Parse or patterns (lowest precedence): pattern | pattern *)
+and parse_or_pattern tokens =
+  match parse_alias_pattern tokens with
+  | Ok (left, rest) ->
+      parse_or_continuation left rest
+  | Error e -> Error e
+
+and parse_or_continuation left tokens =
+  match peek_token tokens with
+  | Some Or ->
+      (match consume_token tokens with
+       | (Some Or, rest) ->
+           (match parse_or_pattern rest with
+            | Ok (right, rest') ->
+                Ok (make_or_pattern left right, rest')
+            | Error e -> Error e)
+       | _ -> Ok (left, tokens))
+  | _ -> Ok (left, tokens)
+
+(* Parse alias patterns: pattern as value-name *)
+and parse_alias_pattern tokens =
+  match parse_cons_pattern tokens with
+  | Ok (p, rest) ->
+      (match peek_token rest with
+       | Some As ->
+           (match consume_token rest with
+            | (Some As, rest') ->
+                (match consume_token rest' with
+                 | (Some (Ident name), rest'') when validate_lowercase_ident name ->
+                     Ok (make_pattern_alias p name, rest'')
+                 | _ -> Error "Expected value name after 'as'")
+            | _ -> Ok (p, rest))
+       | _ -> Ok (p, rest))
+  | Error e -> Error e
+
+(* Parse cons patterns: pattern :: pattern *)
+and parse_cons_pattern tokens =
+  match parse_tuple_pattern tokens with
+  | Ok (left, rest) ->
+      parse_cons_continuation left rest
+  | Error e -> Error e
+
+and parse_cons_continuation left tokens =
+  match peek_token tokens with
+  | Some ColonColon ->
+      (match consume_token tokens with
+       | (Some ColonColon, rest) ->
+           (match parse_cons_pattern rest with
+            | Ok (right, rest') ->
+                Ok (make_cons_pattern left right, rest')
+            | Error e -> Error e)
+       | _ -> Ok (left, tokens))
+  | _ -> Ok (left, tokens)
+
+(* Parse tuple patterns: pattern, pattern, ... *)
+and parse_tuple_pattern tokens =
+  match parse_constructor_app_pattern tokens with
+  | Ok (first, rest) ->
+      parse_tuple_continuation [first] rest
+  | Error e -> Error e
+
+and parse_tuple_continuation acc tokens =
+  match peek_token tokens with
+  | Some Comma ->
+      (match consume_token tokens with
+       | (Some Comma, rest) ->
+           (match parse_constructor_app_pattern rest with
+            | Ok (p, rest') ->
+                parse_tuple_continuation (p :: acc) rest'
+            | Error e -> Error e)
+       | _ -> 
+           if List.length acc > 1 then
+             Ok (make_tuple_pattern (List.rev acc), tokens)
+           else
+             (match acc with
+              | [single] -> Ok (single, tokens)
+              | [] -> Error "Empty tuple list"
+              | _ -> Ok (make_tuple_pattern (List.rev acc), tokens)))
+  | _ -> 
+      if List.length acc > 1 then
+        Ok (make_tuple_pattern (List.rev acc), tokens)
+      else
+        (match acc with
+         | [single] -> Ok (single, tokens)
+         | [] -> Error "Empty tuple list"
+         | _ -> Ok (make_tuple_pattern (List.rev acc), tokens))
+
+(* Parse constructor application patterns: Constructor pattern *)
+and parse_constructor_app_pattern tokens =
+  match parse_primary_pattern tokens with
+  | Ok (p, rest) ->
+      (match p with
+       | PatternConstructor path ->
+           (* Check if next token could be a pattern (constructor application) *)
+           (match peek_token rest with
+            | Some (Ident _) | Some LParen | Some LBracket | Some LBrace | Some Quote ->
+                (match parse_primary_pattern rest with
+                 | Ok (arg_pattern, rest') ->
+                     Ok (make_constructor_pattern_with_arg path arg_pattern, rest')
+                 | Error _ -> Ok (p, rest))
+            | _ -> Ok (p, rest))
+       | _ -> Ok (p, rest))
+  | Error e -> Error e
+
+(* Parse primary patterns: atoms and compound structures *)
+and parse_primary_pattern tokens =
+  match peek_token tokens with
+  | Some (Ident "_") ->
+      (* Wildcard pattern *)
+      (match consume_token tokens with
+       | (Some (Ident "_"), rest) ->
+           Ok (make_wildcard_pattern (), rest)
+       | _ -> Error "Expected wildcard")
+  | Some (Ident name) when validate_lowercase_ident name ->
+      (* Value name pattern *)
+      (match consume_token tokens with
+       | (Some (Ident value_name), rest) ->
+           Ok (make_value_name_pattern value_name, rest)
+       | _ -> Error "Expected value name")
+  | Some (Ident name) when validate_capitalized_ident name ->
+      (* Constructor pattern *)
+      (match parse_constr tokens with
+       | Ok (constr_path, rest) ->
+           Ok (make_constructor_pattern constr_path, rest)
+       | Error e -> Error e)
+  | Some LParen ->
+      parse_parenthesized_pattern tokens
+  | Some LBracket ->
+      parse_list_or_array_pattern tokens
+  | Some LBrace ->
+      parse_record_pattern tokens
+  | Some Quote ->
+      parse_range_or_char_pattern tokens
+  | Some Lazy ->
+      parse_lazy_pattern tokens
+  | Some Exception ->
+      parse_exception_pattern tokens
+  | _ ->
+      (* Try to parse as constant *)
+      (match parse_constant_tokens tokens with
+       | Ok (constant, rest) ->
+           Ok (make_pattern_constant constant, rest)
+       | Error e -> Error e)
+
+(* Parse parenthesized patterns: ( pattern ) *)
+and parse_parenthesized_pattern tokens =
+  match consume_token tokens with
+  | (Some LParen, rest) ->
+      (match parse_pattern rest with
+       | Ok (p, rest') ->
+           (match expect_rparen rest' with
+            | Ok rest'' ->
+                Ok (make_parenthesized_pattern p, rest'')
+            | Error e -> Error e)
+       | Error e -> Error e)
+  | _ -> Error "Expected '('"
+
+(* Parse list or array patterns: [pattern; ...] or [|pattern; ...|] *)
+and parse_list_or_array_pattern tokens =
+  match consume_token tokens with
+  | (Some LBracket, rest) ->
+      (match peek_token rest with
+       | Some Or ->
+           (* Array pattern [|...|] *)
+           (match consume_token rest with
+            | (Some Or, rest') ->
+                parse_array_pattern_contents rest'
+            | _ -> Error "Expected '|' for array pattern")
+       | Some RBracket ->
+           (* Empty list pattern [] *)
+           (match consume_token rest with
+            | (Some RBracket, rest') ->
+                Ok (make_list_pattern [], rest')
+            | _ -> Error "Expected ']'")
+       | _ ->
+           (* Non-empty list pattern *)
+           parse_list_pattern_contents rest)
+  | _ -> Error "Expected '['"
+
+and parse_list_pattern_contents tokens =
+  match parse_pattern tokens with
+  | Ok (first, rest) ->
+      parse_list_pattern_continuation [first] rest
+  | Error e -> Error e
+
+and parse_list_pattern_continuation acc tokens =
+  match peek_token tokens with
+  | Some Semicolon ->
+      (match consume_token tokens with
+       | (Some Semicolon, rest) ->
+           (match peek_token rest with
+            | Some RBracket ->
+                (match consume_token rest with
+                 | (Some RBracket, rest') ->
+                     Ok (make_list_pattern (List.rev acc), rest')
+                 | _ -> Error "Expected ']'")
+            | _ ->
+                (match parse_pattern rest with
+                 | Ok (p, rest') ->
+                     parse_list_pattern_continuation (p :: acc) rest'
+                 | Error e -> Error e))
+       | _ -> Error "Expected ';'")
+  | Some RBracket ->
+      (match consume_token tokens with
+       | (Some RBracket, rest) ->
+           Ok (make_list_pattern (List.rev acc), rest)
+       | _ -> Error "Expected ']'")
+  | _ -> Error "Expected ';' or ']'"
+
+and parse_array_pattern_contents tokens =
+  match peek_token tokens with
+  | Some Or ->
+      (* Empty array [||] *)
+      (match consume_token tokens with
+       | (Some Or, rest) ->
+           (match expect_rbracket rest with
+            | Ok rest' ->
+                Ok (make_array_pattern [], rest')
+            | Error e -> Error e)
+       | _ -> Error "Expected '|'")
+  | _ ->
+      (* Non-empty array *)
+      (match parse_pattern tokens with
+       | Ok (first, rest) ->
+           parse_array_pattern_continuation [first] rest
+       | Error e -> Error e)
+
+and parse_array_pattern_continuation acc tokens =
+  match peek_token tokens with
+  | Some Semicolon ->
+      (match consume_token tokens with
+       | (Some Semicolon, rest) ->
+           (match peek_token rest with
+            | Some Or ->
+                (match consume_token rest with
+                 | (Some Or, rest') ->
+                     (match expect_rbracket rest' with
+                      | Ok rest'' ->
+                          Ok (make_array_pattern (List.rev acc), rest'')
+                      | Error e -> Error e)
+                 | _ -> Error "Expected '|'")
+            | _ ->
+                (match parse_pattern rest with
+                 | Ok (p, rest') ->
+                     parse_array_pattern_continuation (p :: acc) rest'
+                 | Error e -> Error e))
+       | _ -> Error "Expected ';'")
+  | Some Or ->
+      (match consume_token tokens with
+       | (Some Or, rest) ->
+           (match expect_rbracket rest with
+            | Ok rest' ->
+                Ok (make_array_pattern (List.rev acc), rest')
+            | Error e -> Error e)
+       | _ -> Error "Expected '|'")
+  | _ -> Error "Expected ';' or '|'"
+
+and expect_rbracket tokens =
+  match consume_token tokens with
+  | (Some RBracket, rest) -> Ok rest
+  | _ -> Error "Expected ']'"
+
+(* Parse record patterns: {field = pattern; ...} *)
+and parse_record_pattern tokens =
+  match consume_token tokens with
+  | (Some LBrace, rest) ->
+      (match peek_token rest with
+       | Some RBrace ->
+           (* Empty record {} *)
+           (match consume_token rest with
+            | (Some RBrace, rest') ->
+                Ok (make_record_pattern [] false, rest')
+            | _ -> Error "Expected '}'")
+       | _ ->
+           parse_record_pattern_contents rest)
+  | _ -> Error "Expected '{'"
+
+and parse_record_pattern_contents tokens =
+  match parse_record_pattern_field tokens with
+  | Ok (first, rest) ->
+      parse_record_pattern_continuation [first] rest
+  | Error e -> Error e
+
+and parse_record_pattern_field tokens =
+  match parse_field tokens with
+  | Ok (field_path, rest) ->
+      (match expect_eq rest with
+       | Ok rest' ->
+           (match parse_pattern rest' with
+            | Ok (p, rest'') ->
+                Ok (make_record_pattern_field field_path p, rest'')
+            | Error e -> Error e)
+       | Error e -> Error e)
+  | Error e -> Error e
+
+and expect_eq tokens =
+  match consume_token tokens with
+  | (Some Eq, rest) -> Ok rest
+  | _ -> Error "Expected '='"
+
+and parse_record_pattern_continuation acc tokens =
+  match peek_token tokens with
+  | Some Semicolon ->
+      (match consume_token tokens with
+       | (Some Semicolon, rest) ->
+           (match peek_token rest with
+            | Some (Ident "_") ->
+                (* Record with wildcard {field = pattern; _} *)
+                (match consume_token rest with
+                 | (Some (Ident "_"), rest') ->
+                     (match expect_rbrace rest' with
+                      | Ok rest'' ->
+                          Ok (make_record_pattern (List.rev acc) true, rest'')
+                      | Error e -> Error e)
+                 | _ -> Error "Expected '_'")
+            | Some RBrace ->
+                (match consume_token rest with
+                 | (Some RBrace, rest') ->
+                     Ok (make_record_pattern (List.rev acc) false, rest')
+                 | _ -> Error "Expected '}'")
+            | _ ->
+                (match parse_record_pattern_field rest with
+                 | Ok (field, rest') ->
+                     parse_record_pattern_continuation (field :: acc) rest'
+                 | Error e -> Error e))
+       | _ -> Error "Expected ';'")
+  | Some RBrace ->
+      (match consume_token tokens with
+       | (Some RBrace, rest) ->
+           Ok (make_record_pattern (List.rev acc) false, rest)
+       | _ -> Error "Expected '}'")
+  | _ -> Error "Expected ';' or '}'"
+
+and expect_rbrace tokens =
+  match consume_token tokens with
+  | (Some RBrace, rest) -> Ok rest
+  | _ -> Error "Expected '}'"
+
+(* Parse range or character patterns: 'a'..'z' or 'c' *)
+and parse_range_or_char_pattern tokens =
+  match consume_token tokens with
+  | (Some Quote, rest) ->
+      (match consume_token rest with
+       | (Some (Char c), rest') ->
+           (match peek_token rest' with
+            | Some Quote ->
+                (match consume_token rest' with
+                 | (Some Quote, rest'') ->
+                     (match peek_token rest'' with
+                      | Some DotDot ->
+                          (* Range pattern 'a'..'z' *)
+                          (match consume_token rest'' with
+                           | (Some DotDot, rest''') ->
+                               (match consume_token rest''' with
+                                | (Some Quote, rest'''') ->
+                                    (match consume_token rest'''' with
+                                     | (Some (Char end_c), rest''''') ->
+                                         (match consume_token rest''''' with
+                                          | (Some Quote, rest'''''') ->
+                                              Ok (make_range_pattern c end_c, rest'''''')
+                                          | _ -> Error "Expected closing quote")
+                                     | _ -> Error "Expected character")
+                                | _ -> Error "Expected quote")
+                           | _ -> Error "Expected '..'")
+                      | _ ->
+                          (* Single character pattern 'c' *)
+                          Ok (make_pattern_constant (make_char_literal c), rest''))
+                 | _ -> Error "Expected closing quote")
+            | _ -> Error "Expected closing quote")
+       | _ -> Error "Expected character")
+  | _ -> Error "Expected quote"
+
+(* Parse lazy patterns: lazy pattern *)
+and parse_lazy_pattern tokens =
+  match consume_token tokens with
+  | (Some Lazy, rest) ->
+      (match parse_primary_pattern rest with
+       | Ok (p, rest') ->
+           Ok (make_lazy_pattern p, rest')
+       | Error e -> Error e)
+  | _ -> Error "Expected 'lazy'"
+
+(* Parse exception patterns: exception pattern *)
+and parse_exception_pattern tokens =
+  match consume_token tokens with
+  | (Some Exception, rest) ->
+      (match parse_primary_pattern rest with
+       | Ok (p, rest') ->
+           Ok (make_exception_pattern p, rest')
+       | Error e -> Error e)
+  | _ -> Error "Expected 'exception'"
 
 (* Helper function to parse comma-separated list *)
 let rec parse_comma_separated_list parse_fn tokens =
@@ -636,17 +1044,17 @@ and parse_as_type tokens =
 and parse_tuple_type tokens =
   match parse_app_type tokens with
   | Ok (first, rest) ->
-      parse_tuple_continuation [first] rest
+      parse_type_tuple_continuation [first] rest
   | Error e -> Error e
 
-and parse_tuple_continuation acc tokens =
+and parse_type_tuple_continuation acc tokens =
   match peek_token tokens with
   | Some (InfixOp "*") ->
       (match consume_token tokens with
        | (Some (InfixOp "*"), rest) ->
            (match parse_app_type rest with
             | Ok (t, rest') ->
-                parse_tuple_continuation (t :: acc) rest'
+                parse_type_tuple_continuation (t :: acc) rest'
             | Error e -> Error e)
        | _ -> 
            if List.length acc > 1 then
@@ -891,11 +1299,16 @@ let parse_from_lexer lexer =
        | Ok (ast, []) -> Ok (TypeExpr ast)  (* Successfully parsed all tokens as type expression *)
        | Ok (_, remaining) -> Error ("Unexpected tokens remaining: " ^ String.concat ~sep:" " (List.map remaining ~f:string_of_token))
        | Error _ ->
-           (* Try parsing as constant if type expression parsing failed *)
-           (match parse_constant_tokens tokens with
-            | Ok (constant, []) -> Ok (Constant constant)  (* Successfully parsed all tokens as constant *)
+           (* Try parsing as pattern if type expression parsing failed *)
+           (match parse_pattern tokens with
+            | Ok (pattern, []) -> Ok (Pattern pattern)  (* Successfully parsed all tokens as pattern *)
             | Ok (_, remaining) -> Error ("Unexpected tokens remaining: " ^ String.concat ~sep:" " (List.map remaining ~f:string_of_token))
-            | Error e -> Error e))
+            | Error _ ->
+                (* Try parsing as constant if pattern parsing failed *)
+                (match parse_constant_tokens tokens with
+                 | Ok (constant, []) -> Ok (Constant constant)  (* Successfully parsed all tokens as constant *)
+                 | Ok (_, remaining) -> Error ("Unexpected tokens remaining: " ^ String.concat ~sep:" " (List.map remaining ~f:string_of_token))
+                 | Error e -> Error e)))
   | Error e -> Error e
 
 (* Convenience function to parse from string *)
@@ -916,3 +1329,17 @@ let parse_constant_from_lexer lexer =
 let parse_constant_string str source =
   let lexer = Lexer.create str source in
   parse_constant_from_lexer lexer
+
+(* Specific parsing functions for patterns *)
+let parse_pattern_from_lexer lexer =
+  match tokens_from_lexer lexer with
+  | Ok tokens -> 
+      (match parse_pattern tokens with
+       | Ok (pattern, []) -> Ok pattern  (* Successfully parsed all tokens *)
+       | Ok (_, remaining) -> Error ("Unexpected tokens remaining: " ^ String.concat ~sep:" " (List.map remaining ~f:string_of_token))
+       | Error e -> Error e)
+  | Error e -> Error e
+
+let parse_pattern_string str source =
+  let lexer = Lexer.create str source in
+  parse_pattern_from_lexer lexer

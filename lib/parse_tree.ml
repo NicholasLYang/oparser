@@ -93,6 +93,32 @@ and polymorphic_variant_type =
 and method_type = { method_name : method_name; poly_typexpr : poly_typexpr }
 [@@deriving sexp]
 
+(* Pattern expressions *)
+type pattern =
+  | ValueName of value_name (* value-name *)
+  | PatternWildcard (* _ *)
+  | PatternConstant of constant (* constant *)
+  | PatternAlias of pattern * value_name (* pattern as value-name *)
+  | PatternConstructor of constr_path (* constr *)
+  | ConstructorPattern of constr_path * pattern (* constr pattern *)
+  | TuplePattern of pattern list (* pattern { , pattern }+ *)
+  | ConsPattern of pattern * pattern (* pattern :: pattern *)
+  | ListPattern of pattern list (* [pattern {; pattern}*] *)
+  | RecordPattern of record_pattern_field list * bool (* {field-name=pattern; ...} [; _] *)
+  | ArrayPattern of pattern list (* [|pattern {; pattern}*|] *)
+  | RangePattern of char * char (* 'a'..'z' *)
+  | LazyPattern of pattern (* lazy pattern *)
+  | ExceptionPattern of pattern (* exception pattern *)
+  | OrPattern of pattern * pattern (* pattern | pattern *)
+  | ParenthesizedPattern of pattern (* ( pattern ) *)
+[@@deriving sexp]
+
+and record_pattern_field = {
+  field_name : field_path;
+  pattern : pattern
+}
+[@@deriving sexp]
+
 (* Parse tree for complete constructs *)
 type parse_tree =
   | TypeExpr of typexpr
@@ -106,6 +132,7 @@ type parse_tree =
   | ClassPath of class_path
   | ClassTypePath of classtype_path
   | Constant of constant
+  | Pattern of pattern
 [@@deriving sexp]
 
 (* Pretty printing functions *)
@@ -209,6 +236,31 @@ let string_of_modtype_path = string_of_path
 let string_of_class_path = string_of_path
 let string_of_classtype_path = string_of_path
 
+let rec string_of_pattern = function
+  | ValueName name -> name
+  | PatternWildcard -> "_"
+  | PatternConstant c -> string_of_constant c
+  | PatternAlias (p, name) -> string_of_pattern p ^ " as " ^ name
+  | PatternConstructor path -> string_of_constr_path path
+  | ConstructorPattern (path, p) -> string_of_constr_path path ^ " " ^ string_of_pattern p
+  | TuplePattern patterns -> "(" ^ String.concat ~sep:", " (List.map patterns ~f:string_of_pattern) ^ ")"
+  | ConsPattern (head, tail) -> string_of_pattern head ^ " :: " ^ string_of_pattern tail
+  | ListPattern patterns -> "[" ^ String.concat ~sep:"; " (List.map patterns ~f:string_of_pattern) ^ "]"
+  | RecordPattern (fields, has_wildcard) ->
+      let field_strs = List.map fields ~f:string_of_record_pattern_field in
+      let fields_str = String.concat ~sep:"; " field_strs in
+      let wildcard_str = if has_wildcard then "; _" else "" in
+      "{" ^ fields_str ^ wildcard_str ^ "}"
+  | ArrayPattern patterns -> "[|" ^ String.concat ~sep:"; " (List.map patterns ~f:string_of_pattern) ^ "|]"
+  | RangePattern (start, stop) -> "'" ^ String.make 1 start ^ "'.." ^ "'" ^ String.make 1 stop ^ "'"
+  | LazyPattern p -> "lazy " ^ string_of_pattern p
+  | ExceptionPattern p -> "exception " ^ string_of_pattern p
+  | OrPattern (p1, p2) -> string_of_pattern p1 ^ " | " ^ string_of_pattern p2
+  | ParenthesizedPattern p -> "(" ^ string_of_pattern p ^ ")"
+
+and string_of_record_pattern_field { field_name; pattern } =
+  string_of_field_path field_name ^ " = " ^ string_of_pattern pattern
+
 let string_of_parse_tree = function
   | TypeExpr t -> "TypeExpr: " ^ string_of_typexpr t
   | PolyTypeExpr pt -> "PolyTypeExpr: " ^ string_of_poly_typexpr pt
@@ -221,6 +273,7 @@ let string_of_parse_tree = function
   | ClassPath cp -> "ClassPath: " ^ string_of_class_path cp
   | ClassTypePath ctp -> "ClassTypePath: " ^ string_of_classtype_path ctp
   | Constant c -> "Constant: " ^ string_of_constant c
+  | Pattern p -> "Pattern: " ^ string_of_pattern p
 
 (* Helper functions for creating parse tree nodes *)
 let make_type_var id = TypeVar id
@@ -257,3 +310,22 @@ let make_begin_end () = BeginEnd
 let make_empty_list () = EmptyList
 let make_empty_array () = EmptyArray
 let make_polymorphic_variant_tag tag = PolymorphicVariantTag tag
+
+(* Helper functions for creating pattern nodes *)
+let make_value_name_pattern name = ValueName name
+let make_wildcard_pattern () = PatternWildcard
+let make_pattern_constant c = PatternConstant c
+let make_pattern_alias p name = PatternAlias (p, name)
+let make_constructor_pattern path = PatternConstructor path
+let make_constructor_pattern_with_arg path p = ConstructorPattern (path, p)
+let make_tuple_pattern patterns = TuplePattern patterns
+let make_cons_pattern head tail = ConsPattern (head, tail)
+let make_list_pattern patterns = ListPattern patterns
+let make_record_pattern fields has_wildcard = RecordPattern (fields, has_wildcard)
+let make_array_pattern patterns = ArrayPattern patterns
+let make_range_pattern start stop = RangePattern (start, stop)
+let make_lazy_pattern p = LazyPattern p
+let make_exception_pattern p = ExceptionPattern p
+let make_or_pattern p1 p2 = OrPattern (p1, p2)
+let make_parenthesized_pattern p = ParenthesizedPattern p
+let make_record_pattern_field field_name pattern = { field_name; pattern }
