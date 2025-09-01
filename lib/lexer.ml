@@ -997,6 +997,9 @@ let rec get_next lexer =
       | '}' -> 
           lexer.at_line_start <- false;
           Ok (Some (s RBrace ~start_index:index ~end_index:index))
+      | '|' -> 
+          lexer.at_line_start <- false;
+          Ok (Some (s Bar ~start_index:index ~end_index:index))
       | '+' -> 
           lexer.at_line_start <- false;
           Ok (Some (s Plus ~start_index:index ~end_index:index))
@@ -1061,6 +1064,12 @@ let rec get_next lexer =
           | Some ('~', _) ->
               shift_forward lexer;
               Ok (Some (s DotTilde ~start_index:index ~end_index:index))
+          | Some ('(', _) ->
+              shift_forward lexer;
+              Ok (Some (s DotLParen ~start_index:index ~end_index:index))
+          | Some ('[', _) ->
+              shift_forward lexer;
+              Ok (Some (s DotLBracket ~start_index:index ~end_index:index))
           | _ -> Ok (Some (s Dot ~start_index:index ~end_index:index)))
       | ':' -> (
           lexer.at_line_start <- false;
@@ -1073,7 +1082,7 @@ let rec get_next lexer =
               Ok (Some (s ColonEq ~start_index:index ~end_index:index))
           | Some ('>', _) ->
               shift_forward lexer;
-              Ok (Some (s RightArrow ~start_index:index ~end_index:index))
+              Ok (Some (s ColonGt ~start_index:index ~end_index:index))
           | _ ->
               Ok (Some (s ColonRightArrow ~start_index:index ~end_index:index)))
       | ';' -> (

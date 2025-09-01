@@ -5,7 +5,12 @@
       "Bash(ocamlfind ocamlc:*)",
       "Bash(find:*)",
       "Bash(sed:*)",
-      "WebFetch(domain:ocaml.org)"
+      "WebFetch(domain:ocaml.org)",
+      "Bash(ocamlc:*)",
+      "Bash(./test_expressions_manual)",
+      "Bash(./test_complex_expressions)",
+      "Bash(grep:*)",
+      "Bash(awk:*)"
     ],
     "deny": []
   }

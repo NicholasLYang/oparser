@@ -119,6 +119,98 @@ and record_pattern_field = {
 }
 [@@deriving sexp]
 
+(* Expression types *)
+type expr =
+  | ConstantExpr of constant (* constant *)
+  | ValuePathExpr of value_path (* value-path *)
+  | ParenthesizedExpr of expr (* ( expr ) *)
+  | BeginEndExpr of expr (* begin expr end *)
+  | TypeConstraint of expr * typexpr (* ( expr : typexpr ) *)
+  | TupleExpr of expr list (* expr { , expr }+ *)
+  | ConstructorExpr of constr_path * expr option (* constr [expr] *)
+  | PolymorphicVariantExpr of tag_name * expr option (* `tag-name [expr] *)
+  | ConsExpr of expr * expr (* expr :: expr *)
+  | ListExpr of expr list (* [ expr { ; expr } [;] ] *)
+  | ArrayExpr of expr list (* [| expr { ; expr } [;] |] *)
+  | RecordExpr of record_field list (* { field [: typexpr] [= expr] { ; field [: typexpr] [= expr] } [;] } *)
+  | RecordUpdate of expr * record_field list (* { expr with field [: typexpr] [= expr] { ; field [: typexpr] [= expr] } [;] } *)
+  | FunctionApp of expr * argument list (* expr { argument }+ *)
+  | PrefixOp of string * expr (* prefix-symbol expr *)
+  | InfixOp of expr * string * expr (* expr infix-op expr *)
+  | FieldAccess of expr * field_path (* expr . field *)
+  | FieldUpdate of expr * field_path * expr (* expr . field <- expr *)
+  | ArrayAccess of expr * expr (* expr .( expr ) *)
+  | ArrayUpdate of expr * expr * expr (* expr .( expr ) <- expr *)
+  | StringAccess of expr * expr (* expr .[ expr ] *)
+  | StringUpdate of expr * expr * expr (* expr .[ expr ] <- expr *)
+  | IfThenElse of expr * expr * expr option (* if expr then expr [ else expr ] *)
+  | While of expr * expr (* while expr do expr done *)
+  | For of value_name * expr * for_direction * expr * expr (* for value-name = expr ( to | downto ) expr do expr done *)
+  | Sequence of expr * expr (* expr ; expr *)
+  | Match of expr * case list (* match expr with pattern-matching *)
+  | Function of case list (* function pattern-matching *)
+  | Lambda of parameter list * typexpr option * expr (* fun { parameter }+ [ : typexpr ] -> expr *)
+  | Try of expr * case list (* try expr with pattern-matching *)
+  | Let of let_binding list * expr (* let [rec] let-binding { and let-binding } in expr *)
+  | LetRec of let_binding list * expr (* let rec let-binding { and let-binding } in expr *)
+  | LetException of constr_name * constr_decl option * expr (* let exception constr-decl in expr *)
+  | LetModule of module_name * module_params * module_type option * module_expr * expr (* let module module-name { ( module-name : module-type ) } [ : module-type ] = module-expr in expr *)
+  | Coercion of expr * typexpr (* ( expr :> typexpr ) *)
+  | SubtypingCoercion of expr * typexpr * typexpr (* ( expr : typexpr :> typexpr ) *)
+  | Assert of expr (* assert expr *)
+  | Lazy of expr (* lazy expr *)
+  | LocalOpen of module_path * expr (* let open module-path in expr OR module-path.( expr ) *)
+  | ObjectExpr of object_expr (* object class-body end *)
+[@@deriving sexp]
+
+and for_direction = 
+  | To
+  | Downto
+[@@deriving sexp]
+
+and argument =
+  | SimpleArg of expr
+  | LabeledArg of label_name * expr (* label:expr *)
+  | OptionalArg of label_name * expr option (* ?label[:expr] *)
+[@@deriving sexp]
+
+and parameter =
+  | SimpleParam of pattern
+  | LabeledParam of label_name * pattern (* label:pattern *)
+  | OptionalParam of label_name * pattern * expr option (* ?label[:pattern] [= expr] *)
+  | TypeParam of typexpr (* ( type typeconstr-name ) *)
+[@@deriving sexp]
+
+and let_binding = {
+  pattern: pattern;
+  params: parameter list;
+  type_constraint: typexpr option;
+  expr: expr;
+}
+[@@deriving sexp]
+
+and case = {
+  pattern: pattern;
+  guard: expr option; (* when expr *)
+  expr: expr;
+}
+[@@deriving sexp]
+
+and record_field = {
+  field_path: field_path;
+  type_constraint: typexpr option;
+  expr: expr option;
+}
+[@@deriving sexp]
+
+(* Placeholder types for now *)
+and constr_decl = unit (* TODO: Define constructor declaration *)
+and module_params = unit (* TODO: Define module parameters *)
+and module_type = unit (* TODO: Define module type *)
+and module_expr = unit (* TODO: Define module expression *)
+and object_expr = unit (* TODO: Define object expression *)
+[@@deriving sexp]
+
 (* Parse tree for complete constructs *)
 type parse_tree =
   | TypeExpr of typexpr
@@ -133,6 +225,7 @@ type parse_tree =
   | ClassTypePath of classtype_path
   | Constant of constant
   | Pattern of pattern
+  | Expr of expr
 [@@deriving sexp]
 
 (* Pretty printing functions *)
@@ -261,6 +354,84 @@ let rec string_of_pattern = function
 and string_of_record_pattern_field { field_name; pattern } =
   string_of_field_path field_name ^ " = " ^ string_of_pattern pattern
 
+let rec string_of_expr = function
+  | ConstantExpr c -> string_of_constant c
+  | ValuePathExpr path -> string_of_value_path path
+  | ParenthesizedExpr e -> "(" ^ string_of_expr e ^ ")"
+  | BeginEndExpr e -> "begin " ^ string_of_expr e ^ " end"
+  | TypeConstraint (e, t) -> "(" ^ string_of_expr e ^ " : " ^ string_of_typexpr t ^ ")"
+  | TupleExpr exprs -> "(" ^ String.concat ~sep:", " (List.map exprs ~f:string_of_expr) ^ ")"
+  | ConstructorExpr (path, None) -> string_of_constr_path path
+  | ConstructorExpr (path, Some e) -> string_of_constr_path path ^ " " ^ string_of_expr e
+  | PolymorphicVariantExpr (tag, None) -> "`" ^ tag
+  | PolymorphicVariantExpr (tag, Some e) -> "`" ^ tag ^ " " ^ string_of_expr e
+  | ConsExpr (head, tail) -> string_of_expr head ^ " :: " ^ string_of_expr tail
+  | ListExpr exprs -> "[" ^ String.concat ~sep:"; " (List.map exprs ~f:string_of_expr) ^ "]"
+  | ArrayExpr exprs -> "[|" ^ String.concat ~sep:"; " (List.map exprs ~f:string_of_expr) ^ "|]"
+  | RecordExpr fields -> "{" ^ String.concat ~sep:"; " (List.map fields ~f:string_of_record_field) ^ "}"
+  | RecordUpdate (e, fields) -> "{" ^ string_of_expr e ^ " with " ^ String.concat ~sep:"; " (List.map fields ~f:string_of_record_field) ^ "}"
+  | FunctionApp (f, args) -> string_of_expr f ^ " " ^ String.concat ~sep:" " (List.map args ~f:string_of_argument)
+  | PrefixOp (op, e) -> op ^ " " ^ string_of_expr e
+  | InfixOp (e1, op, e2) -> string_of_expr e1 ^ " " ^ op ^ " " ^ string_of_expr e2
+  | FieldAccess (e, field) -> string_of_expr e ^ "." ^ string_of_field_path field
+  | FieldUpdate (e, field, value) -> string_of_expr e ^ "." ^ string_of_field_path field ^ " <- " ^ string_of_expr value
+  | ArrayAccess (e, idx) -> string_of_expr e ^ ".(" ^ string_of_expr idx ^ ")"
+  | ArrayUpdate (e, idx, value) -> string_of_expr e ^ ".(" ^ string_of_expr idx ^ ") <- " ^ string_of_expr value
+  | StringAccess (e, idx) -> string_of_expr e ^ ".[" ^ string_of_expr idx ^ "]"
+  | StringUpdate (e, idx, value) -> string_of_expr e ^ ".[" ^ string_of_expr idx ^ "] <- " ^ string_of_expr value
+  | IfThenElse (cond, then_e, None) -> "if " ^ string_of_expr cond ^ " then " ^ string_of_expr then_e
+  | IfThenElse (cond, then_e, Some else_e) -> "if " ^ string_of_expr cond ^ " then " ^ string_of_expr then_e ^ " else " ^ string_of_expr else_e
+  | While (cond, body) -> "while " ^ string_of_expr cond ^ " do " ^ string_of_expr body ^ " done"
+  | For (var, start, dir, stop, body) -> 
+      "for " ^ var ^ " = " ^ string_of_expr start ^ 
+      (match dir with To -> " to " | Downto -> " downto ") ^
+      string_of_expr stop ^ " do " ^ string_of_expr body ^ " done"
+  | Sequence (e1, e2) -> string_of_expr e1 ^ "; " ^ string_of_expr e2
+  | Match (e, cases) -> "match " ^ string_of_expr e ^ " with " ^ String.concat ~sep:" | " (List.map cases ~f:string_of_case)
+  | Function cases -> "function " ^ String.concat ~sep:" | " (List.map cases ~f:string_of_case)
+  | Lambda (params, None, body) -> "fun " ^ String.concat ~sep:" " (List.map params ~f:string_of_parameter) ^ " -> " ^ string_of_expr body
+  | Lambda (params, Some t, body) -> "fun " ^ String.concat ~sep:" " (List.map params ~f:string_of_parameter) ^ " : " ^ string_of_typexpr t ^ " -> " ^ string_of_expr body
+  | Try (e, cases) -> "try " ^ string_of_expr e ^ " with " ^ String.concat ~sep:" | " (List.map cases ~f:string_of_case)
+  | Let (bindings, body) -> "let " ^ String.concat ~sep:" and " (List.map bindings ~f:string_of_let_binding) ^ " in " ^ string_of_expr body
+  | LetRec (bindings, body) -> "let rec " ^ String.concat ~sep:" and " (List.map bindings ~f:string_of_let_binding) ^ " in " ^ string_of_expr body
+  | LetException (name, _, body) -> "let exception " ^ name ^ " in " ^ string_of_expr body
+  | LetModule (name, _, _, _, body) -> "let module " ^ name ^ " = ... in " ^ string_of_expr body
+  | Coercion (e, t) -> "(" ^ string_of_expr e ^ " :> " ^ string_of_typexpr t ^ ")"
+  | SubtypingCoercion (e, t1, t2) -> "(" ^ string_of_expr e ^ " : " ^ string_of_typexpr t1 ^ " :> " ^ string_of_typexpr t2 ^ ")"
+  | Assert e -> "assert " ^ string_of_expr e
+  | Lazy e -> "lazy " ^ string_of_expr e
+  | LocalOpen (path, e) -> "let open " ^ String.concat ~sep:"." path ^ " in " ^ string_of_expr e
+  | ObjectExpr _ -> "object ... end"
+
+and string_of_argument = function
+  | SimpleArg e -> string_of_expr e
+  | LabeledArg (label, e) -> label ^ ":" ^ string_of_expr e
+  | OptionalArg (label, None) -> "?" ^ label
+  | OptionalArg (label, Some e) -> "?" ^ label ^ ":" ^ string_of_expr e
+
+and string_of_parameter = function
+  | SimpleParam p -> string_of_pattern p
+  | LabeledParam (label, p) -> label ^ ":" ^ string_of_pattern p
+  | OptionalParam (label, p, None) -> "?" ^ label ^ ":" ^ string_of_pattern p
+  | OptionalParam (label, p, Some e) -> "?" ^ label ^ ":" ^ string_of_pattern p ^ " = " ^ string_of_expr e
+  | TypeParam t -> "(type " ^ string_of_typexpr t ^ ")"
+
+and string_of_let_binding { pattern; params; type_constraint; expr } =
+  string_of_pattern pattern ^ 
+  (if List.is_empty params then "" else " " ^ String.concat ~sep:" " (List.map params ~f:string_of_parameter)) ^
+  (match type_constraint with None -> "" | Some t -> " : " ^ string_of_typexpr t) ^
+  " = " ^ string_of_expr expr
+
+and string_of_case { pattern; guard; expr } =
+  string_of_pattern pattern ^
+  (match guard with None -> "" | Some g -> " when " ^ string_of_expr g) ^
+  " -> " ^ string_of_expr expr
+
+and string_of_record_field { field_path; type_constraint; expr } =
+  string_of_field_path field_path ^
+  (match type_constraint with None -> "" | Some t -> " : " ^ string_of_typexpr t) ^
+  (match expr with None -> "" | Some e -> " = " ^ string_of_expr e)
+
 let string_of_parse_tree = function
   | TypeExpr t -> "TypeExpr: " ^ string_of_typexpr t
   | PolyTypeExpr pt -> "PolyTypeExpr: " ^ string_of_poly_typexpr pt
@@ -274,6 +445,7 @@ let string_of_parse_tree = function
   | ClassTypePath ctp -> "ClassTypePath: " ^ string_of_classtype_path ctp
   | Constant c -> "Constant: " ^ string_of_constant c
   | Pattern p -> "Pattern: " ^ string_of_pattern p
+  | Expr e -> "Expr: " ^ string_of_expr e
 
 (* Helper functions for creating parse tree nodes *)
 let make_type_var id = TypeVar id

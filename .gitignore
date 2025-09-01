@@ -1,3 +1,5 @@
 _opam
 _build
 .vscode
+*.cmo
+*.cmi

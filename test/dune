@@ -1,6 +1,17 @@
 (library
  (libraries oparser)
  (name test_oparser)
+ (modules test_type_parser test_lexer)
  (inline_tests)
  (preprocess
   (pps ppx_expect)))
+
+(executable
+ (public_name test_error_recovery)
+ (name test_error_recovery)
+ (modules test_error_recovery)
+ (libraries oparser base grace sexplib))
+
+(rule
+ (alias runtest_recovery)
+ (action (run ./test_error_recovery.exe)))

@@ -1,0 +1,8 @@
+(executable
+ (public_name test_error_recovery)
+ (name test_error_recovery)
+ (libraries oparser_lib base grace sexplib))
+
+(alias
+ (name runtest)
+ (action (run ./test_error_recovery.exe)))

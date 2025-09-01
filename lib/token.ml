@@ -22,11 +22,14 @@ type token =
   | Dot
   | DotDot
   | DotTilde
+  | DotLParen
+  | DotLBracket
   | Eq
   | Gt
   | Lt
   | LeftArrow
   | RightArrow
+  | ColonGt
   | Label of string
   | OptLabel of string
   | InfixOp of string
@@ -40,6 +43,7 @@ type token =
   | RBracket
   | LBrace
   | RBrace
+  | Bar
   | Plus
   | Minus
   | Ident of string
@@ -63,6 +67,7 @@ type token =
   | False
   | For
   | Fun
+  | Function
   | Functor
   | If
   | In
@@ -120,6 +125,7 @@ let keyword_of_string = function
   | "false" -> Some False
   | "for" -> Some For
   | "fun" -> Some Fun
+  | "function" -> Some Function
   | "functor" -> Some Functor
   | "if" -> Some If
   | "in" -> Some In
@@ -182,11 +188,14 @@ let string_of_token = function
   | Dot -> "."
   | DotDot -> ".."
   | DotTilde -> ".~"
+  | DotLParen -> ".("
+  | DotLBracket -> ".["
   | Eq -> "="
   | Gt -> ">"
   | Lt -> "<"
   | LeftArrow -> "<-"
   | RightArrow -> "->"
+  | ColonGt -> ":>"
   | Tilde -> "~"
   | Question -> "?"
   | Label content -> Printf.sprintf "<label> %s" content
@@ -200,6 +209,7 @@ let string_of_token = function
   | RBracket -> "]"
   | LBrace -> "{"
   | RBrace -> "}"
+  | Bar -> "|"
   | Plus -> "+"
   | Minus -> "-"
   | Ident content -> Printf.sprintf "<ident> %s" content
@@ -223,6 +233,7 @@ let string_of_token = function
   | False -> "false"
   | For -> "for"
   | Fun -> "fun"
+  | Function -> "function"
   | Functor -> "functor"
   | If -> "if"
   | In -> "in"
