@@ -1084,7 +1084,7 @@ let rec get_next lexer =
               shift_forward lexer;
               Ok (Some (s ColonGt ~start_index:index ~end_index:index))
           | _ ->
-              Ok (Some (s ColonRightArrow ~start_index:index ~end_index:index)))
+              Ok (Some (s Colon ~start_index:index ~end_index:index)))
       | ';' -> (
           lexer.at_line_start <- false;
           match peek_next_char lexer with

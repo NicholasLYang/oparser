@@ -122,9 +122,8 @@ val parse_pattern_string : string -> Grace.Source.t -> pattern parse_result
 (** Parse pattern from token list *)
 val parse_pattern : token list -> (pattern * token list) parse_result
 
-(** Expression parsing functions - NOT IMPLEMENTED YET *)
+(** Expression parsing functions *)
 
-(*
 (** Parse expression from lexer *)
 val parse_expr_from_lexer : Lexer.t -> expr parse_result
 
@@ -133,4 +132,3 @@ val parse_expr_string : string -> Grace.Source.t -> expr parse_result
 
 (** Parse expression from token list *)
 val parse_expr : token list -> (expr * token list) parse_result
-*)

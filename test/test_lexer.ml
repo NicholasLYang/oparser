@@ -116,7 +116,7 @@ let%expect_test _ =
 
 let%expect_test _ =
   Print.print_tokens_from_string "{123|not valid";
-  [%expect {| [{ (0-0)]  [<int> 123 (1-3)]  [<infixop> | (4-5)]  [<ident> not (5-8)]  [<ident> valid (9-14)] |}]
+  [%expect {| [{ (0-0)]  [<int> 123 (1-3)]  [| (4-4)]  [<ident> not (5-8)]  [<ident> valid (9-14)] |}]
 
 let%expect_test _ =
   Print.print_tokens_from_string "{||}";

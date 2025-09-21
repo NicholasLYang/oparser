@@ -14,6 +14,7 @@ type token =
   | AndAnd
   | Quote
   | Comma
+  | Colon
   | ColonColon
   | ColonEq
   | ColonRightArrow
@@ -180,6 +181,7 @@ let string_of_token = function
   | AndAnd -> "&&"
   | Quote -> "'"
   | Comma -> ","
+  | Colon -> ":"
   | Semicolon -> ";"
   | SemicolonSemicolon -> ";;"
   | ColonColon -> "::"

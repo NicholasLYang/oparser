@@ -6,9 +6,8 @@ type 'a parse_result = ('a, string) Result.t
 
 (* Check if token is a synchronization point *)
 let is_sync_token = function
-  | Token.Semicolon | Token.RParen | Token.RBrace | Token.RBracket | Token.In
-  | Token.Then | Token.Else | Token.Done | Token.End | Token.With | Token.Or
-  | Token.And | Token.RightArrow | Token.Comma | Token.Dot | Token.Gt ->
+  | Semicolon | RParen | RBrace | RBracket | In | Then | Else | Done | End
+  | With | Or | And | RightArrow | Comma | Dot | Gt ->
       true
   | _ -> false
 
@@ -20,22 +19,22 @@ let rec skip_until_tokens target_tokens tokens =
       if
         List.exists target_tokens ~f:(fun target ->
             match (t, target) with
-            | Token.Semicolon, Token.Semicolon -> true
-            | Token.RParen, Token.RParen -> true
-            | Token.RBrace, Token.RBrace -> true
-            | Token.RBracket, Token.RBracket -> true
-            | Token.In, Token.In -> true
-            | Token.Then, Token.Then -> true
-            | Token.Else, Token.Else -> true
-            | Token.Done, Token.Done -> true
-            | Token.End, Token.End -> true
-            | Token.With, Token.With -> true
-            | Token.Or, Token.Or -> true
-            | Token.And, Token.And -> true
-            | Token.RightArrow, Token.RightArrow -> true
-            | Token.Comma, Token.Comma -> true
-            | Token.Dot, Token.Dot -> true
-            | Token.Gt, Token.Gt -> true
+            | Semicolon, Semicolon -> true
+            | RParen, RParen -> true
+            | RBrace, RBrace -> true
+            | RBracket, RBracket -> true
+            | In, In -> true
+            | Then, Then -> true
+            | Else, Else -> true
+            | Done, Done -> true
+            | End, End -> true
+            | With, With -> true
+            | Or, Or -> true
+            | And, And -> true
+            | RightArrow, RightArrow -> true
+            | Comma, Comma -> true
+            | Dot, Dot -> true
+            | Gt, Gt -> true
             | _ -> false)
       then tokens
       else skip_until_tokens target_tokens rest
@@ -126,7 +125,7 @@ let parse_value_name = function
   | _ -> Error "Expected value name"
 
 let parse_operator_name = function
-  | Token.InfixOp s when validate_operator_name s -> Ok s
+  | Ident s when validate_operator_name s -> Ok s
   | _ -> Error "Expected operator name"
 
 let parse_constr_name = function
@@ -197,7 +196,7 @@ let _expect_lparen_recover tokens =
   match consume_token tokens with
   | Some LParen, rest -> Ok rest
   | _ ->
-      let _ = skip_until_tokens [ Token.RParen; Token.Semicolon ] tokens in
+      let _ = skip_until_tokens [ RParen; Semicolon ] tokens in
       Error "Expected '('"
 
 let expect_rparen tokens =
@@ -210,10 +209,8 @@ let _expect_rparen_recover tokens =
   | Some RParen, rest -> Ok rest
   | _ -> (
       (* Skip until we find a closing paren or other sync point *)
-      match
-        skip_until_tokens [ Token.RParen; Token.Semicolon; Token.Comma ] tokens
-      with
-      | Token.RParen :: rest -> Ok rest
+      match skip_until_tokens [ RParen; Semicolon; Comma ] tokens with
+      | RParen :: rest -> Ok rest
       | _ -> Error "Expected ')'")
 
 (* Path parsing utilities *)
@@ -257,9 +254,9 @@ and parse_extended_module_name_continuation base_name tokens =
                     base_name ^ "(" ^ String.concat ~sep:"." path ^ ")"
                   in
                   parse_extended_module_name_continuation extended_name rest''
-              | Error e -> Error e)
-          | Error e -> Error e)
-      | Error e -> Error e)
+              | Error err -> Error err)
+          | Error err -> Error err)
+      | Error err -> Error err)
   | _ -> Ok (base_name, tokens)
 
 and parse_extended_module_path tokens =
@@ -275,7 +272,7 @@ and parse_extended_module_path_continuation acc tokens =
           match parse_extended_module_name rest with
           | Ok (name, rest') ->
               parse_extended_module_path_continuation (name :: acc) rest'
-          | Error e -> Error e)
+          | Error err -> Error err)
       | _ -> Ok (List.rev acc, tokens))
   | _ -> Ok (List.rev acc, tokens)
 
@@ -294,7 +291,7 @@ let try_parse_with_module_path parse_name tokens =
       when validate_capitalized_ident module_name -> (
         match parse_name (Ident name) with
         | Ok parsed_name -> Ok ((Some [ module_name ], parsed_name), rest)
-        | Error e -> Error e)
+        | Error err -> Error err)
     | _ -> Error "Invalid module path pattern"
   else
     (* No module path pattern detected, just parse name *)
@@ -302,7 +299,7 @@ let try_parse_with_module_path parse_name tokens =
     | Some token, rest -> (
         match parse_name token with
         | Ok name -> Ok ((None, name), rest)
-        | Error e -> Error e)
+        | Error err -> Error err)
     | _ -> Error "Expected name"
 
 (* Main path parsers *)
@@ -325,7 +322,7 @@ let parse_typeconstr tokens =
                   | Some token', rest''' -> (
                       match parse_typeconstr_name token' with
                       | Ok name -> Ok ((Some path, name), rest''')
-                      | Error e -> Error e)
+                      | Error err -> Error err)
                   | _ ->
                       Error "Expected type constructor name after module path")
               | Error _ -> Error "Expected '.' after module path")
@@ -350,7 +347,7 @@ let parse_modtype_path tokens =
                   | Some token', rest''' -> (
                       match parse_modtype_name token' with
                       | Ok name -> Ok ((Some path, name), rest''')
-                      | Error e -> Error e)
+                      | Error err -> Error err)
                   | _ -> Error "Expected module type name after module path")
               | Error _ -> Error "Expected '.' after module path")
           | Error _ -> Error "Expected module type name"))
@@ -463,7 +460,7 @@ let parse_constant_tokens tokens =
       | Some token, rest -> (
           match parse_constant token with
           | Ok constant -> Ok (constant, rest)
-          | Error e -> Error e)
+          | Error err -> Error err)
       | _ -> Error "Expected constant token")
   | None -> Error "Expected constant token"
 
@@ -494,7 +491,7 @@ and parse_or_continuation left tokens =
       | Some Or, rest -> (
           match parse_or_pattern rest with
           | Ok (right, rest') -> Ok (make_or_pattern left right, rest')
-          | Error e -> Error e)
+          | Error err -> Error err)
       | _ -> Ok (left, tokens))
   | _ -> Ok (left, tokens)
 
@@ -527,7 +524,7 @@ and parse_cons_continuation left tokens =
       | Some ColonColon, rest -> (
           match parse_cons_pattern rest with
           | Ok (right, rest') -> Ok (make_cons_pattern left right, rest')
-          | Error e -> Error e)
+          | Error err -> Error err)
       | _ -> Ok (left, tokens))
   | _ -> Ok (left, tokens)
 
@@ -544,7 +541,7 @@ and parse_tuple_continuation acc tokens =
       | Some Comma, rest -> (
           match parse_constructor_app_pattern rest with
           | Ok (p, rest') -> parse_tuple_continuation (p :: acc) rest'
-          | Error e -> Error e)
+          | Error err -> Error err)
       | _ -> (
           if List.length acc > 1 then
             Ok (make_tuple_pattern (List.rev acc), tokens)
@@ -600,7 +597,7 @@ and parse_primary_pattern tokens =
       (* Constructor pattern *)
       match parse_constr tokens with
       | Ok (constr_path, rest) -> Ok (make_constructor_pattern constr_path, rest)
-      | Error e -> Error e)
+      | Error err -> Error err)
   | Some LParen -> parse_parenthesized_pattern tokens
   | Some LBracket -> parse_list_or_array_pattern tokens
   | Some LBrace -> parse_record_pattern tokens
@@ -611,7 +608,7 @@ and parse_primary_pattern tokens =
       (* Try to parse as constant *)
       match parse_constant_tokens tokens with
       | Ok (constant, rest) -> Ok (make_pattern_constant constant, rest)
-      | Error e -> Error e)
+      | Error err -> Error err)
 
 (* Parse parenthesized patterns: ( pattern ) *)
 and parse_parenthesized_pattern tokens =
@@ -621,17 +618,16 @@ and parse_parenthesized_pattern tokens =
       | Ok (p, rest') -> (
           match expect_rparen rest' with
           | Ok rest'' -> Ok (make_parenthesized_pattern p, rest'')
-          | Error e -> (
+          | Error _ -> (
               (* Try to recover by finding the closing paren *)
-              match skip_until_tokens [ Token.RParen ] rest' with
-              | Token.RParen :: rest'' ->
-                  Ok (make_parenthesized_pattern p, rest'')
-              | _ -> Error e))
-      | Error e -> (
+              match skip_until_tokens [ RParen ] rest' with
+              | RParen :: rest'' -> Ok (make_parenthesized_pattern p, rest'')
+              | _ -> Error "Expected ')' after pattern"))
+      | Error _ -> (
           (* Skip to closing paren and continue *)
-          match skip_until_tokens [ Token.RParen ] rest with
-          | Token.RParen :: _ -> Error "Invalid pattern in parentheses"
-          | _ -> Error e))
+          match skip_until_tokens [ RParen ] rest with
+          | RParen :: _ -> Error "Invalid pattern in parentheses"
+          | _ -> Error "Expected ')' in pattern"))
   | _ -> Error "Expected '('"
 
 (* Parse list or array patterns: [pattern; ...] or [|pattern; ...|] *)
@@ -674,16 +670,14 @@ and parse_list_pattern_continuation acc tokens =
               match parse_pattern rest with
               | Ok (p, rest') ->
                   parse_list_pattern_continuation (p :: acc) rest'
-              | Error e -> (
+              | Error _ -> (
                   (* Skip to next semicolon or closing bracket *)
-                  match
-                    skip_until_tokens [ Token.Semicolon; Token.RBracket ] rest
-                  with
-                  | Token.Semicolon :: rest' ->
+                  match skip_until_tokens [ Semicolon; RBracket ] rest with
+                  | Semicolon :: rest' ->
                       parse_list_pattern_continuation acc rest'
-                  | Token.RBracket :: rest' ->
+                  | RBracket :: rest' ->
                       Ok (make_list_pattern (List.rev acc), rest')
-                  | _ -> Error e)))
+                  | _ -> Error "Expected ';' or ']' in list pattern")))
       | _ -> Error "Expected ';'")
   | Some RBracket -> (
       match consume_token tokens with
@@ -699,13 +693,13 @@ and parse_array_pattern_contents tokens =
       | Some Or, rest -> (
           match expect_rbracket rest with
           | Ok rest' -> Ok (make_array_pattern [], rest')
-          | Error e -> Error e)
+          | Error err -> Error err)
       | _ -> Error "Expected '|'")
   | _ -> (
       (* Non-empty array *)
       match parse_pattern tokens with
       | Ok (first, rest) -> parse_array_pattern_continuation [ first ] rest
-      | Error e -> Error e)
+      | Error err -> Error err)
 
 and parse_array_pattern_continuation acc tokens =
   match peek_token tokens with
@@ -718,20 +712,20 @@ and parse_array_pattern_continuation acc tokens =
               | Some Or, rest' -> (
                   match expect_rbracket rest' with
                   | Ok rest'' -> Ok (make_array_pattern (List.rev acc), rest'')
-                  | Error e -> Error e)
+                  | Error err -> Error err)
               | _ -> Error "Expected '|'")
           | _ -> (
               match parse_pattern rest with
               | Ok (p, rest') ->
                   parse_array_pattern_continuation (p :: acc) rest'
-              | Error e -> Error e))
+              | Error err -> Error err))
       | _ -> Error "Expected ';'")
   | Some Or -> (
       match consume_token tokens with
       | Some Or, rest -> (
           match expect_rbracket rest with
           | Ok rest' -> Ok (make_array_pattern (List.rev acc), rest')
-          | Error e -> Error e)
+          | Error err -> Error err)
       | _ -> Error "Expected '|'")
   | _ -> Error "Expected ';' or '|'"
 
@@ -765,8 +759,8 @@ and parse_record_pattern_field tokens =
       | Ok rest' -> (
           match parse_pattern rest' with
           | Ok (p, rest'') -> Ok (make_record_pattern_field field_path p, rest'')
-          | Error e -> Error e)
-      | Error e -> Error e)
+          | Error err -> Error err)
+      | Error err -> Error err)
   | Error e -> Error e
 
 and expect_eq tokens =
@@ -787,12 +781,12 @@ and parse_record_pattern_continuation acc tokens =
                   match expect_rbrace rest' with
                   | Ok rest'' ->
                       Ok (make_record_pattern (List.rev acc) true, rest'')
-                  | Error e -> (
+                  | Error _ -> (
                       (* Try to recover *)
-                      match skip_until_tokens [ Token.RBrace ] rest' with
-                      | Token.RBrace :: rest'' ->
+                      match skip_until_tokens [ RBrace ] rest' with
+                      | RBrace :: rest'' ->
                           Ok (make_record_pattern (List.rev acc) true, rest'')
-                      | _ -> Error e))
+                      | _ -> Error "Expected '}' after record wildcard"))
               | _ -> Error "Expected '_'")
           | Some RBrace -> (
               match consume_token rest with
@@ -803,16 +797,14 @@ and parse_record_pattern_continuation acc tokens =
               match parse_record_pattern_field rest with
               | Ok (field, rest') ->
                   parse_record_pattern_continuation (field :: acc) rest'
-              | Error e -> (
+              | Error _ -> (
                   (* Skip to next semicolon or closing brace *)
-                  match
-                    skip_until_tokens [ Token.Semicolon; Token.RBrace ] rest
-                  with
-                  | Token.Semicolon :: rest' ->
+                  match skip_until_tokens [ Semicolon; RBrace ] rest with
+                  | Semicolon :: rest' ->
                       parse_record_pattern_continuation acc rest'
-                  | Token.RBrace :: rest' ->
+                  | RBrace :: rest' ->
                       Ok (make_record_pattern (List.rev acc) false, rest')
-                  | _ -> Error e)))
+                  | _ -> Error "Expected ';' or '}' in record pattern")))
       | _ -> Error "Expected ';'")
   | Some RBrace -> (
       match consume_token tokens with
@@ -829,8 +821,8 @@ and _expect_rbrace_recover tokens =
   match consume_token tokens with
   | Some RBrace, rest -> Ok rest
   | _ -> (
-      match skip_until_tokens [ Token.RBrace; Token.Semicolon ] tokens with
-      | Token.RBrace :: rest -> Ok rest
+      match skip_until_tokens [ RBrace; Semicolon ] tokens with
+      | RBrace :: rest -> Ok rest
       | _ -> Error "Expected '}'")
 
 (* Parse range or character patterns: 'a'..'z' or 'c' *)
@@ -873,7 +865,7 @@ and parse_lazy_pattern tokens =
   | Some Lazy, rest -> (
       match parse_primary_pattern rest with
       | Ok (p, rest') -> Ok (make_lazy_pattern p, rest')
-      | Error e -> Error e)
+      | Error err -> Error err)
   | _ -> Error "Expected 'lazy'"
 
 (* Parse exception patterns: exception pattern *)
@@ -882,7 +874,7 @@ and parse_exception_pattern tokens =
   | Some Exception, rest -> (
       match parse_primary_pattern rest with
       | Ok (p, rest') -> Ok (make_exception_pattern p, rest')
-      | Error e -> Error e)
+      | Error err -> Error err)
   | _ -> Error "Expected 'exception'"
 
 (* Helper function to parse comma-separated list *)
@@ -900,7 +892,7 @@ and parse_comma_separated_continuation parse_fn acc tokens =
           match parse_fn rest with
           | Ok (item, rest') ->
               parse_comma_separated_continuation parse_fn (item :: acc) rest'
-          | Error e -> Error e)
+          | Error err -> Error err)
       | _ -> Ok (List.rev acc, tokens))
   | _ -> Ok (List.rev acc, tokens)
 
@@ -915,8 +907,8 @@ let rec parse_method_type tokens =
           match parse_poly_typexpr rest' with
           | Ok (poly_type, rest'') ->
               Ok (make_method_type name poly_type, rest'')
-          | Error e -> Error e)
-      | Error e -> Error e)
+          | Error err -> Error err)
+      | Error err -> Error err)
   | _ -> Error "Expected method name"
 
 and expect_colon tokens =
@@ -950,8 +942,8 @@ and parse_polymorphic_type tokens =
       | Ok rest' -> (
           match parse_typexpr rest' with
           | Ok (t, rest'') -> Ok (make_poly_type vars t, rest'')
-          | Error e -> Error e)
-      | Error e -> Error e)
+          | Error err -> Error err)
+      | Error err -> Error err)
   | Error e -> Error e
 
 and parse_type_variable_list tokens =
@@ -1003,7 +995,7 @@ and parse_arrow_continuation left tokens =
       | Some RightArrow, rest -> (
           match parse_arrow_type rest with
           | Ok (right, rest') -> Ok (make_arrow left right, rest')
-          | Error e -> Error e)
+          | Error err -> Error err)
       | _ -> Ok (left, tokens))
   | Some (Ident label) when is_label_like label tokens ->
       (* Handle labeled arguments *)
@@ -1027,9 +1019,9 @@ and parse_labeled_arrow left tokens =
                       match parse_arrow_type rest''' with
                       | Ok (return_type, rest'''') ->
                           Ok (make_arrow ~label arg_type return_type, rest'''')
-                      | Error e -> Error e)
-                  | Error e -> Error e)
-              | Error e -> Error e)
+                      | Error err -> Error err)
+                  | Error err -> Error err)
+              | Error err -> Error err)
           | _ -> Error "Expected ':'")
       | Some Question -> (
           (* Optional labeled argument *)
@@ -1052,9 +1044,9 @@ and parse_optional_labeled_arrow label _left tokens =
                   Ok
                     ( make_arrow ~label ~optional:true arg_type return_type,
                       rest''' )
-              | Error e -> Error e)
-          | Error e -> Error e)
-      | Error e -> Error e)
+              | Error err -> Error err)
+          | Error err -> Error err)
+      | Error err -> Error err)
   | Error e -> Error e
 
 and expect_right_arrow tokens =
@@ -1095,10 +1087,10 @@ and parse_type_tuple_continuation acc tokens =
   match peek_token tokens with
   | Some (Token.InfixOp "*") -> (
       match consume_token tokens with
-      | Some (Token.InfixOp "*"), rest -> (
+      | Some _, rest -> (
           match parse_app_type rest with
           | Ok (t, rest') -> parse_type_tuple_continuation (t :: acc) rest'
-          | Error e -> Error e)
+          | Error err -> Error err)
       | _ -> (
           if List.length acc > 1 then Ok (make_tuple (List.rev acc), tokens)
           else
@@ -1138,7 +1130,7 @@ and parse_app_continuation t tokens =
       | Some Hash, rest -> (
           match parse_class_path rest with
           | Ok (class_path, rest') -> Ok (make_classtype_app t class_path, rest')
-          | Error e -> Error e)
+          | Error err -> Error err)
       | _ -> Ok (t, tokens))
   | _ -> Ok (t, tokens)
 
@@ -1192,16 +1184,16 @@ and parse_parenthesized_type tokens =
                       match parse_type_constructor rest''' with
                       | Ok (tc_path, rest'''') ->
                           Ok (make_type_app_multi types tc_path, rest'''')
-                      | Error e -> Error e)
-                  | Error e -> Error e)
-              | Error e -> Error e)
+                      | Error err -> Error err)
+                  | Error err -> Error err)
+              | Error err -> Error err)
           | Some RParen -> (
               (* Single parenthesized type *)
               match consume_token rest' with
               | Some RParen, rest'' -> Ok (make_parenthesized t, rest'')
               | _ -> Error "Expected ')'")
           | _ -> Error "Expected ')' or ','")
-      | Error e -> Error e)
+      | Error err -> Error err)
   | _ -> Error "Expected '('"
 
 and parse_type_constructor tokens =
@@ -1227,7 +1219,7 @@ and parse_object_type tokens =
           | Some DotDot, rest' -> (
               match expect_gt rest' with
               | Ok rest'' -> Ok (make_object_empty (), rest'')
-              | Error e -> Error e)
+              | Error err -> Error err)
           | _ -> Error "Expected '..'")
       | _ ->
           (* Object with methods *)
@@ -1245,7 +1237,7 @@ and parse_object_methods tokens =
           | Some DotDot, rest -> (
               match expect_gt rest with
               | Ok rest' -> Ok (make_object_empty (), rest')
-              | Error e -> Error e)
+              | Error err -> Error err)
           | _ -> Error "Expected '..'")
       | Some Gt -> (
           match consume_token tokens with
@@ -1266,7 +1258,7 @@ and parse_object_methods_continuation methods tokens =
                   match expect_gt rest' with
                   | Ok rest'' ->
                       Ok (make_object (List.rev methods) true true, rest'')
-                  | Error e -> Error e)
+                  | Error err -> Error err)
               | _ -> Error "Expected '..'")
           | Some Gt -> (
               (* ; > *)
@@ -1279,7 +1271,7 @@ and parse_object_methods_continuation methods tokens =
               match parse_method_type rest with
               | Ok (method_t, rest') ->
                   parse_object_methods_continuation (method_t :: methods) rest'
-              | Error e -> Error e))
+              | Error err -> Error err))
       | _ -> Error "Expected ';'")
   | Some Gt -> (
       match consume_token tokens with
@@ -1300,7 +1292,7 @@ and parse_class_type tokens =
   | Some Hash, rest -> (
       match parse_classtype_path rest with
       | Ok (ct_path, rest') -> Ok (make_classtype ct_path, rest')
-      | Error e -> Error e)
+      | Error err -> Error err)
   | _ -> Error "Expected '#'"
 
 and parse_class_path tokens = try_parse_with_module_path parse_class_name tokens
@@ -1322,7 +1314,7 @@ and parse_classtype_path tokens =
                   | Some token' -> (
                       match parse_class_name token' with
                       | Ok name -> Ok ((Some path, name), rest''')
-                      | Error e -> Error e)
+                      | Error err -> Error err)
                   | None -> Error "Expected class name after module path")
               | _ -> Error "Expected class name after module path")
           | Error _ -> Error "Expected class name"))
@@ -1429,7 +1421,7 @@ let parse_constant_from_lexer lexer =
           Error
             ("Unexpected tokens remaining: "
             ^ String.concat ~sep:" " (List.map remaining ~f:string_of_token))
-      | Error e -> Error e)
+      | Error err -> Error err)
   | Error e -> Error e
 
 let parse_constant_string str source =
@@ -1446,7 +1438,7 @@ let parse_pattern_from_lexer lexer =
           Error
             ("Unexpected tokens remaining: "
             ^ String.concat ~sep:" " (List.map remaining ~f:string_of_token))
-      | Error e -> Error e)
+      | Error err -> Error err)
   | Error e -> Error e
 
 let parse_pattern_string str source =
@@ -1454,29 +1446,34 @@ let parse_pattern_string str source =
   parse_pattern_from_lexer lexer
 
 (* Helper function to convert token number to parse tree constant *)
-let _number_to_constant = function
-  | Token.Int i -> Parse_tree.IntegerLiteral i
-  | Token.Int32 i -> Parse_tree.Int32Literal i
-  | Token.Int64 i -> Parse_tree.Int64Literal i
-  | Token.NativeInt i -> Parse_tree.NativeIntLiteral i
+let number_to_constant = function
+  | Int i -> Parse_tree.IntegerLiteral i
+  | Int32 i -> Parse_tree.Int32Literal i
+  | Int64 i -> Parse_tree.Int64Literal i
+  | NativeInt i -> Parse_tree.NativeIntLiteral i
   | Token.Float f -> Parse_tree.FloatLiteral f
 
-(* Expression parsing functions - NOT IMPLEMENTED YET *)
+(* Expression parsing functions *)
 
-(*
 (* Parse primary expressions (highest precedence) *)
 let rec parse_primary_expr tokens =
   match tokens with
   | [] -> Error "Expected expression"
-  | Number n :: rest -> Ok (ConstantExpr (number_to_constant n), rest)
-  | Char c :: rest -> Ok (ConstantExpr (CharLiteral c), rest)
-  | String s :: rest -> Ok (ConstantExpr (StringLiteral s), rest)
-  | True :: rest -> Ok (ConstantExpr True, rest)
-  | False :: rest -> Ok (ConstantExpr False, rest)
-  | LParen :: RParen :: rest -> Ok (ConstantExpr Unit, rest)
-  | Begin :: End :: rest -> Ok (ConstantExpr BeginEnd, rest)
-  | LBracket :: RBracket :: rest -> Ok (ConstantExpr EmptyList, rest)
-  | LBracket :: Bar :: RBracket :: rest -> Ok (ConstantExpr EmptyArray, rest)
+  | Number n :: rest -> Ok (Parse_tree.ConstantExpr (number_to_constant n), rest)
+  | Char c :: rest ->
+      Ok (Parse_tree.ConstantExpr (Parse_tree.CharLiteral c), rest)
+  | String s :: rest ->
+      Ok (Parse_tree.ConstantExpr (Parse_tree.StringLiteral s), rest)
+  | True :: rest -> Ok (Parse_tree.ConstantExpr Parse_tree.True, rest)
+  | False :: rest -> Ok (Parse_tree.ConstantExpr Parse_tree.False, rest)
+  | LParen :: RParen :: rest ->
+      Ok (Parse_tree.ConstantExpr Parse_tree.Unit, rest)
+  | Begin :: End :: rest ->
+      Ok (Parse_tree.ConstantExpr Parse_tree.BeginEnd, rest)
+  | LBracket :: RBracket :: rest ->
+      Ok (Parse_tree.ConstantExpr Parse_tree.EmptyList, rest)
+  | LBracket :: Bar :: RBracket :: rest ->
+      Ok (Parse_tree.ConstantExpr Parse_tree.EmptyArray, rest)
   | PolymorphicVariantTag tag :: rest -> (
       match rest with
       | LParen :: _
@@ -1490,30 +1487,32 @@ let rec parse_primary_expr tokens =
       | False :: _ -> (
           (* Has an argument *)
           match parse_primary_expr rest with
-          | Ok (arg, rest') -> Ok (PolymorphicVariantExpr (tag, Some arg), rest')
-          | Error e -> Error e)
-      | _ -> Ok (PolymorphicVariantExpr (tag, None), rest))
+          | Ok (arg, rest') ->
+              Ok (Parse_tree.PolymorphicVariantExpr (tag, Some arg), rest')
+          | Error err -> Error err)
+      | _ -> Ok (Parse_tree.PolymorphicVariantExpr (tag, None), rest))
   | LParen :: rest -> (
       (* Could be parenthesized expr, tuple, or type constraint *)
       match parse_expr rest with
       | Ok (e, Colon :: rest') -> (
           (* Type constraint *)
           match parse_typexpr rest' with
-          | Ok (t, RParen :: rest'') -> Ok (TypeConstraint (e, t), rest'')
+          | Ok (t, RParen :: rest'') ->
+              Ok (Parse_tree.TypeConstraint (e, t), rest'')
           | Ok (_, _) -> Error "Expected ')' after type constraint"
-          | Error e -> Error e)
+          | Error err -> Error err)
       | Ok (e, Comma :: rest') ->
           (* Tuple *)
           parse_tuple_elements [ e ] rest'
-      | Ok (e, RParen :: rest') -> Ok (ParenthesizedExpr e, rest')
+      | Ok (e, RParen :: rest') -> Ok (Parse_tree.ParenthesizedExpr e, rest')
       | Ok (_, _) ->
           Error "Expected ')', ',' or ':' in parenthesized expression"
-      | Error e -> Error e)
+      | Error err -> Error err)
   | Begin :: rest -> (
       match parse_expr rest with
-      | Ok (e, End :: rest') -> Ok (BeginEndExpr e, rest')
+      | Ok (e, End :: rest') -> Ok (Parse_tree.BeginEndExpr e, rest')
       | Ok (_, _) -> Error "Expected 'end' after 'begin'"
-      | Error e -> Error e)
+      | Error err -> Error err)
   | LBracket :: rest -> (
       match rest with
       | Bar :: _ -> parse_array_expr rest
@@ -1521,16 +1520,16 @@ let rec parse_primary_expr tokens =
   | LBrace :: rest -> parse_record_expr rest
   | Lazy :: rest -> (
       match parse_primary_expr rest with
-      | Ok (e, rest') -> Ok (Lazy e, rest')
-      | Error e -> Error e)
+      | Ok (e, rest') -> Ok (Parse_tree.Lazy e, rest')
+      | Error err -> Error err)
   | Assert :: rest -> (
       match parse_primary_expr rest with
-      | Ok (e, rest') -> Ok (Assert e, rest')
-      | Error e -> Error e)
-  | token :: _ -> (
+      | Ok (e, rest') -> Ok (Parse_tree.Assert e, rest')
+      | Error err -> Error err)
+  | _ :: _ -> (
       (* Try to parse as value path or constructor *)
       match parse_value_path tokens with
-      | Ok (path, rest) -> Ok (ValuePathExpr path, rest)
+      | Ok (path, rest) -> Ok (Parse_tree.ValuePathExpr path, rest)
       | Error _ -> (
           match parse_constr tokens with
           | Ok (path, rest) -> (
@@ -1545,57 +1544,62 @@ let rec parse_primary_expr tokens =
               | Char _ :: _ -> (
                   match parse_primary_expr rest with
                   | Ok (arg, rest') ->
-                      Ok (ConstructorExpr (path, Some arg), rest')
-                  | Error _ -> Ok (ConstructorExpr (path, None), rest))
-              | _ -> Ok (ConstructorExpr (path, None), rest))
-          | Error e -> Error e))
+                      Ok (Parse_tree.ConstructorExpr (path, Some arg), rest')
+                  | Error _ -> Ok (Parse_tree.ConstructorExpr (path, None), rest)
+                  )
+              | _ -> Ok (Parse_tree.ConstructorExpr (path, None), rest))
+          | Error err -> Error err))
 
 and parse_tuple_elements acc tokens =
   match parse_expr tokens with
   | Ok (e, Comma :: rest) -> parse_tuple_elements (e :: acc) rest
-  | Ok (e, RParen :: rest) -> Ok (TupleExpr (List.rev (e :: acc)), rest)
+  | Ok (e, RParen :: rest) ->
+      Ok (Parse_tree.TupleExpr (List.rev (e :: acc)), rest)
   | Ok (_, _) -> Error "Expected ',' or ')' in tuple"
   | Error e -> Error e
 
 and parse_list_expr tokens =
   match tokens with
-  | RBracket :: rest -> Ok (ListExpr [], rest)
+  | RBracket :: rest -> Ok (Parse_tree.ListExpr [], rest)
   | _ -> parse_list_elements [] tokens
 
 and parse_list_elements acc tokens =
   match parse_expr tokens with
   | Ok (e, Semicolon :: rest) -> parse_list_elements (e :: acc) rest
-  | Ok (e, RBracket :: rest) -> Ok (ListExpr (List.rev (e :: acc)), rest)
+  | Ok (e, RBracket :: rest) ->
+      Ok (Parse_tree.ListExpr (List.rev (e :: acc)), rest)
   | Ok (_, _) -> Error "Expected ';' or ']' in list"
   | Error e -> Error e
 
 and parse_array_expr tokens =
   match tokens with
-  | Bar :: RBracket :: rest -> Ok (ArrayExpr [], rest)
+  | Bar :: RBracket :: rest -> Ok (Parse_tree.ArrayExpr [], rest)
   | _ -> parse_array_elements [] tokens
 
 and parse_array_elements acc tokens =
   match parse_expr tokens with
   | Ok (e, Semicolon :: rest) -> parse_array_elements (e :: acc) rest
-  | Ok (e, Bar :: RBracket :: rest) -> Ok (ArrayExpr (List.rev (e :: acc)), rest)
+  | Ok (e, Bar :: RBracket :: rest) ->
+      Ok (Parse_tree.ArrayExpr (List.rev (e :: acc)), rest)
   | Ok (_, _) -> Error "Expected ';' or '|]' in array"
   | Error e -> Error e
 
 and parse_record_expr tokens =
   match tokens with
-  | RBrace :: rest -> Ok (RecordExpr [], rest)
+  | RBrace :: rest -> Ok (Parse_tree.RecordExpr [], rest)
   | _ -> (
-      match parse_expr tokens with
-      | Ok (e, With :: rest) -> (
-          (* Record update *)
-          match parse_record_fields [] rest with
-          | Ok (fields, rest') -> Ok (RecordUpdate (e, fields), rest')
-          | Error e -> Error e)
+      (* Try to parse fields first *)
+      match parse_record_fields [] tokens with
+      | Ok (fields, rest) -> Ok (Parse_tree.RecordExpr fields, rest)
       | Error _ -> (
-          (* Regular record *)
-          match parse_record_fields [] tokens with
-          | Ok (fields, rest) -> Ok (RecordExpr fields, rest)
-          | Error e -> Error e))
+          (* If that fails, try record update syntax *)
+          match parse_expr tokens with
+          | Ok (e, With :: rest) -> (
+              match parse_record_fields [] rest with
+              | Ok (fields, rest') ->
+                  Ok (Parse_tree.RecordUpdate (e, fields), rest')
+              | Error err -> Error err)
+          | _ -> Error "Expected record fields or record update expression"))
 
 and parse_record_fields acc tokens =
   match parse_field tokens with
@@ -1607,26 +1611,32 @@ and parse_record_fields acc tokens =
               match parse_expr rest'' with
               | Ok (e, rest''') ->
                   let field =
-                    { field_path; type_constraint = Some t; expr = Some e }
+                    {
+                      Parse_tree.field_path;
+                      type_constraint = Some t;
+                      expr = Some e;
+                    }
                   in
                   parse_record_fields_cont (field :: acc) rest'''
-              | Error e -> Error e)
+              | Error err -> Error err)
           | Ok (t, rest'') ->
               let field =
-                { field_path; type_constraint = Some t; expr = None }
+                { Parse_tree.field_path; type_constraint = Some t; expr = None }
               in
               parse_record_fields_cont (field :: acc) rest''
-          | Error e -> Error e)
+          | Error err -> Error err)
       | Eq :: rest' -> (
           match parse_expr rest' with
           | Ok (e, rest'') ->
               let field =
-                { field_path; type_constraint = None; expr = Some e }
+                { Parse_tree.field_path; type_constraint = None; expr = Some e }
               in
               parse_record_fields_cont (field :: acc) rest''
-          | Error e -> Error e)
+          | Error err -> Error err)
       | _ ->
-          let field = { field_path; type_constraint = None; expr = None } in
+          let field =
+            { Parse_tree.field_path; type_constraint = None; expr = None }
+          in
           parse_record_fields_cont (field :: acc) rest)
   | Error e -> Error e
 
@@ -1653,11 +1663,13 @@ and parse_postfix_cont expr tokens =
               (* Array update *)
               match parse_expr rest'' with
               | Ok (value, rest''') ->
-                  parse_postfix_cont (ArrayUpdate (expr, idx, value)) rest'''
-              | Error e -> Error e)
+                  parse_postfix_cont
+                    (Parse_tree.ArrayUpdate (expr, idx, value))
+                    rest'''
+              | Error err -> Error err)
           | Ok (idx, RParen :: rest'') ->
               (* Array access *)
-              parse_postfix_cont (ArrayAccess (expr, idx)) rest''
+              parse_postfix_cont (Parse_tree.ArrayAccess (expr, idx)) rest''
           | _ -> Error "Expected ')' after array index")
       | LBracket :: rest' -> (
           (* String access *)
@@ -1666,11 +1678,13 @@ and parse_postfix_cont expr tokens =
               (* String update *)
               match parse_expr rest'' with
               | Ok (value, rest''') ->
-                  parse_postfix_cont (StringUpdate (expr, idx, value)) rest'''
-              | Error e -> Error e)
+                  parse_postfix_cont
+                    (Parse_tree.StringUpdate (expr, idx, value))
+                    rest'''
+              | Error err -> Error err)
           | Ok (idx, RBracket :: rest'') ->
               (* String access *)
-              parse_postfix_cont (StringAccess (expr, idx)) rest''
+              parse_postfix_cont (Parse_tree.StringAccess (expr, idx)) rest''
           | _ -> Error "Expected ']' after string index")
       | _ -> (
           (* Field access *)
@@ -1679,12 +1693,14 @@ and parse_postfix_cont expr tokens =
               (* Field update *)
               match parse_expr rest' with
               | Ok (value, rest'') ->
-                  parse_postfix_cont (FieldUpdate (expr, field, value)) rest''
-              | Error e -> Error e)
+                  parse_postfix_cont
+                    (Parse_tree.FieldUpdate (expr, field, value))
+                    rest''
+              | Error err -> Error err)
           | Ok (field, rest') ->
               (* Field access *)
-              parse_postfix_cont (FieldAccess (expr, field)) rest'
-          | Error e -> Error e))
+              parse_postfix_cont (Parse_tree.FieldAccess (expr, field)) rest'
+          | Error err -> Error err))
   | _ ->
       (* Try function application *)
       parse_function_app expr [] tokens
@@ -1694,47 +1710,49 @@ and parse_function_app func args tokens =
   | Ok (arg, rest) -> parse_function_app func (arg :: args) rest
   | Error _ ->
       if List.is_empty args then Ok (func, tokens)
-      else Ok (FunctionApp (func, List.rev args), tokens)
+      else Ok (Parse_tree.FunctionApp (func, List.rev args), tokens)
 
 and parse_argument tokens =
   match tokens with
-  | Tilde :: Ident label :: Colon :: rest -> (
+  | Label label :: Colon :: rest -> (
       (* Labeled argument ~label:expr *)
       match parse_primary_expr rest with
-      | Ok (e, rest') -> Ok (LabeledArg (label, e), rest')
-      | Error e -> Error e)
-  | Tilde :: Ident label :: rest ->
+      | Ok (e, rest') -> Ok (Parse_tree.LabeledArg (label, e), rest')
+      | Error err -> Error err)
+  | Label label :: rest ->
       (* Punned labeled argument ~label *)
-      Ok (LabeledArg (label, ValuePathExpr (None, label)), rest)
-  | Question :: Ident label :: Colon :: rest -> (
+      Ok
+        ( Parse_tree.LabeledArg (label, Parse_tree.ValuePathExpr (None, label)),
+          rest )
+  | OptLabel label :: Colon :: rest -> (
       (* Optional argument ?label:expr *)
       match parse_primary_expr rest with
-      | Ok (e, rest') -> Ok (OptionalArg (label, Some e), rest')
-      | Error e -> Error e)
-  | Question :: Ident label :: rest ->
+      | Ok (e, rest') -> Ok (Parse_tree.OptionalArg (label, Some e), rest')
+      | Error err -> Error err)
+  | OptLabel label :: rest ->
       (* Optional argument without value ?label *)
-      Ok (OptionalArg (label, None), rest)
+      Ok (Parse_tree.OptionalArg (label, None), rest)
   | _ -> (
       (* Simple argument *)
       match parse_primary_expr tokens with
-      | Ok (e, rest) -> Ok (SimpleArg e, rest)
-      | Error e -> Error e)
+      | Ok (e, rest) -> Ok (Parse_tree.SimpleArg e, rest)
+      | Error err -> Error err)
 
 (* Parse prefix operators *)
 and parse_prefix_expr tokens =
   match tokens with
   | Minus :: rest -> (
       match parse_postfix_expr rest with
-      | Ok (e, rest') -> Ok (PrefixOp ("-", e), rest')
-      | Error e -> Error e)
+      | Ok (e, rest') -> Ok (Parse_tree.PrefixOp ("-", e), rest')
+      | Error err -> Error err)
   | MinusDot :: rest -> (
       match parse_postfix_expr rest with
-      | Ok (e, rest') -> Ok (PrefixOp ("-.", e), rest')
-      | Error e -> Error e)
+      | Ok (e, rest') -> Ok (Parse_tree.PrefixOp ("-.", e), rest')
+      | Error err -> Error err)
   | Plus :: rest -> (
       match parse_postfix_expr rest with
-      | Ok (e, rest') -> Ok (PrefixOp ("+", e), rest')
-      | Error e -> Error e)
+      | Ok (e, rest') -> Ok (Parse_tree.PrefixOp ("+", e), rest')
+      | Error err -> Error err)
   | _ -> parse_postfix_expr tokens
 
 (* Parse infix operators with precedence *)
@@ -1745,7 +1763,7 @@ and parse_infix_expr tokens =
 
 and parse_infix_cont left tokens =
   match tokens with
-  | Token.InfixOp op :: rest ->
+  | InfixOp op :: rest ->
       let prec = operator_precedence op in
       parse_infix_right left op prec rest tokens
   | Plus :: rest -> parse_infix_right left "+" 6 rest tokens
@@ -1761,12 +1779,12 @@ and parse_infix_right left op prec rest original_tokens =
   match parse_prefix_expr rest with
   | Ok (right, rest') -> (
       match rest' with
-      | Token.InfixOp op2 :: _ when operator_precedence op2 > prec -> (
+      | InfixOp op2 :: _ when operator_precedence op2 > prec -> (
           (* Higher precedence operator, parse it first *)
           match parse_infix_cont right rest' with
           | Ok (right', rest'') ->
               parse_infix_cont (Parse_tree.InfixOp (left, op, right')) rest''
-          | Error e -> Error e)
+          | Error err -> Error err)
       | _ ->
           (* Same or lower precedence, create node *)
           parse_infix_cont (Parse_tree.InfixOp (left, op, right)) rest')
@@ -1786,8 +1804,8 @@ and parse_cons_expr tokens =
   match parse_infix_expr tokens with
   | Ok (head, ColonColon :: rest) -> (
       match parse_cons_expr rest with
-      | Ok (tail, rest') -> Ok (ConsExpr (head, tail), rest')
-      | Error e -> Error e)
+      | Ok (tail, rest') -> Ok (Parse_tree.ConsExpr (head, tail), rest')
+      | Error err -> Error err)
   | result -> result
 
 (* Parse tuple expressions *)
@@ -1799,7 +1817,7 @@ and parse_tuple_expr tokens =
 and parse_tuple_rest acc tokens =
   match parse_cons_expr tokens with
   | Ok (e, Comma :: rest) -> parse_tuple_rest (e :: acc) rest
-  | Ok (e, rest) -> Ok (TupleExpr (List.rev (e :: acc)), rest)
+  | Ok (e, rest) -> Ok (Parse_tree.TupleExpr (List.rev (e :: acc)), rest)
   | Error e -> Error e
 
 (* Parse control flow expressions *)
@@ -1812,35 +1830,22 @@ and parse_control_expr tokens =
           | Ok (then_e, Else :: rest'') -> (
               match parse_expr rest'' with
               | Ok (else_e, rest''') ->
-                  Ok (IfThenElse (cond, then_e, Some else_e), rest''')
-              | Error e -> (
+                  Ok (Parse_tree.IfThenElse (cond, then_e, Some else_e), rest''')
+              | Error _ -> (
                   (* Try to recover by finding next sync point *)
-                  match
-                    skip_until_tokens
-                      [ Token.Semicolon; Token.In; Token.End ]
-                      rest''
-                  with
-                  | rest''' -> Ok (IfThenElse (cond, then_e, None), rest''')))
-          | Ok (then_e, rest'') -> Ok (IfThenElse (cond, then_e, None), rest'')
-          | Error e -> (
-              (* Skip to else or next sync point *)
-              match
-                skip_until_tokens
-                  [ Token.Else; Token.Semicolon; Token.In; Token.End ]
-                  rest'
-              with
-              | Token.Else :: rest'' -> (
-                  match parse_expr rest'' with
-                  | Ok (else_e, rest''') ->
-                      Ok (IfThenElse (cond, then_e, Some else_e), rest''')
-                  | Error _ -> Error e)
-              | rest'' -> Error e))
+                  match skip_until_tokens [ Semicolon; In; End ] rest'' with
+                  | rest''' ->
+                      Ok (Parse_tree.IfThenElse (cond, then_e, None), rest''')))
+          | Ok (then_e, rest'') ->
+              Ok (Parse_tree.IfThenElse (cond, then_e, None), rest'')
+          | Error err -> Error err)
       | _ -> Error "Expected 'then' after 'if' condition")
   | While :: rest -> (
       match parse_expr rest with
       | Ok (cond, Do :: rest') -> (
           match parse_expr rest' with
-          | Ok (body, Done :: rest'') -> Ok (While (cond, body), rest'')
+          | Ok (body, Done :: rest'') ->
+              Ok (Parse_tree.While (cond, body), rest'')
           | _ -> Error "Expected 'done' after 'while' body")
       | _ -> Error "Expected 'do' after 'while' condition")
   | For :: Ident var :: Eq :: rest -> (
@@ -1850,7 +1855,9 @@ and parse_control_expr tokens =
           | Ok (stop, Do :: rest'') -> (
               match parse_expr rest'' with
               | Ok (body, Done :: rest''') ->
-                  Ok (For (var, start, To, stop, body), rest''')
+                  Ok
+                    ( Parse_tree.For (var, start, Parse_tree.To, stop, body),
+                      rest''' )
               | _ -> Error "Expected 'done' after 'for' body")
           | _ -> Error "Expected 'do' after 'for' range")
       | Ok (start, Downto :: rest') -> (
@@ -1858,7 +1865,9 @@ and parse_control_expr tokens =
           | Ok (stop, Do :: rest'') -> (
               match parse_expr rest'' with
               | Ok (body, Done :: rest''') ->
-                  Ok (For (var, start, Downto, stop, body), rest''')
+                  Ok
+                    ( Parse_tree.For (var, start, Parse_tree.Downto, stop, body),
+                      rest''' )
               | _ -> Error "Expected 'done' after 'for' body")
           | _ -> Error "Expected 'do' after 'for' range")
       | _ -> Error "Expected 'to' or 'downto' in 'for' loop")
@@ -1867,24 +1876,24 @@ and parse_control_expr tokens =
       match parse_expr rest with
       | Ok (e, With :: rest') -> (
           match parse_cases rest' with
-          | Ok (cases, rest'') -> Ok (Match (e, cases), rest'')
-          | Error e -> (
+          | Ok (cases, rest'') -> Ok (Parse_tree.Match (e, cases), rest'')
+          | Error _ -> (
               (* Try to recover by finding next sync point *)
               match
                 skip_until_tokens [ Token.Semicolon; Token.In; Token.End ] rest'
               with
-              | rest'' -> Ok (Match (e, []), rest'')))
+              | rest'' -> Ok (Parse_tree.Match (e, []), rest'')))
       | _ -> Error "Expected 'with' after 'match' expression")
   | Function :: rest -> (
       match parse_cases rest with
-      | Ok (cases, rest') -> Ok (Function cases, rest')
-      | Error e -> Error e)
+      | Ok (cases, rest') -> Ok (Parse_tree.Function cases, rest')
+      | Error err -> Error err)
   | Try :: rest -> (
       match parse_expr rest with
       | Ok (e, With :: rest') -> (
           match parse_cases rest' with
-          | Ok (cases, rest'') -> Ok (Try (e, cases), rest'')
-          | Error e -> Error e)
+          | Ok (cases, rest'') -> Ok (Parse_tree.Try (e, cases), rest'')
+          | Error err -> Error err)
       | _ -> Error "Expected 'with' after 'try' expression")
   | _ -> parse_tuple_expr tokens
 
@@ -1902,34 +1911,30 @@ and parse_case_list acc tokens =
           | Ok (guard, RightArrow :: rest'') -> (
               match parse_expr rest'' with
               | Ok (expr, rest''') ->
-                  let case = { pattern; guard = Some guard; expr } in
+                  let case = { Parse_tree.pattern; guard = Some guard; expr } in
                   parse_case_list_cont (case :: acc) rest'''
-              | Error e -> (
+              | Error _ -> (
                   (* Skip to next bar or sync point *)
-                  match
-                    skip_until_tokens
-                      [ Token.Or; Token.Semicolon; Token.In; Token.End ]
-                      rest''
-                  with
-                  | Token.Or :: rest''' -> parse_case_list acc rest'''
+                  match skip_until_tokens [ Or; Semicolon; In; End ] rest'' with
+                  | Or :: rest''' -> parse_case_list acc rest'''
                   | rest''' -> Ok (List.rev acc, rest''')))
           | _ -> Error "Expected '->' after 'when' clause")
       | RightArrow :: rest' -> (
           match parse_expr rest' with
           | Ok (expr, rest'') ->
-              let case = { pattern; guard = None; expr } in
+              let case = { Parse_tree.pattern; guard = None; expr } in
               parse_case_list_cont (case :: acc) rest''
-          | Error e -> (
+          | Error _ -> (
               (* Skip to next bar or sync point *)
               match
                 skip_until_tokens
                   [ Token.Or; Token.Semicolon; Token.In; Token.End ]
                   rest'
               with
-              | Token.Or :: rest'' -> parse_case_list acc rest''
+              | Or :: rest'' -> parse_case_list acc rest''
               | rest'' -> Ok (List.rev acc, rest'')))
       | _ -> Error "Expected '->' or 'when' after pattern")
-  | Error e -> (
+  | Error _ -> (
       (* Skip to next bar and try again *)
       match
         skip_until_tokens
@@ -1962,13 +1967,14 @@ and parse_lambda_params acc tokens =
             | Ok (t, RightArrow :: rest') -> (
                 match parse_expr rest' with
                 | Ok (body, rest'') ->
-                    Ok (Lambda (List.rev acc, Some t, body), rest'')
-                | Error e -> Error e)
+                    Ok (Parse_tree.Lambda (List.rev acc, Some t, body), rest'')
+                | Error err -> Error err)
             | _ -> Error "Expected '->' after return type")
         | RightArrow :: rest -> (
             match parse_expr rest with
-            | Ok (body, rest') -> Ok (Lambda (List.rev acc, None, body), rest')
-            | Error e -> Error e)
+            | Ok (body, rest') ->
+                Ok (Parse_tree.Lambda (List.rev acc, None, body), rest')
+            | Error err -> Error err)
         | _ -> Error "Expected '->' or ':' after parameters")
 
 and parse_parameter tokens =
@@ -1976,59 +1982,62 @@ and parse_parameter tokens =
   | LParen :: Type :: rest -> (
       (* Type parameter *)
       match parse_typexpr rest with
-      | Ok (t, RParen :: rest') -> Ok (TypeParam t, rest')
+      | Ok (t, RParen :: rest') -> Ok (Parse_tree.TypeParam t, rest')
       | _ -> Error "Expected ')' after type parameter")
-  | Tilde :: Ident label :: Colon :: rest -> (
+  | Label label :: Colon :: rest -> (
       (* Labeled parameter *)
       match parse_pattern rest with
-      | Ok (p, rest') -> Ok (LabeledParam (label, p), rest')
-      | Error e -> Error e)
-  | Question :: Ident label :: Colon :: rest -> (
+      | Ok (p, rest') -> Ok (Parse_tree.LabeledParam (label, p), rest')
+      | Error err -> Error err)
+  | OptLabel label :: Colon :: rest -> (
       (* Optional parameter with pattern *)
       match parse_pattern rest with
       | Ok (p, Eq :: rest') -> (
           match parse_expr rest' with
           | Ok (default, rest'') ->
-              Ok (OptionalParam (label, p, Some default), rest'')
-          | Error e -> Error e)
-      | Ok (p, rest') -> Ok (OptionalParam (label, p, None), rest')
-      | Error e -> Error e)
-  | Question :: Ident label :: rest ->
+              Ok (Parse_tree.OptionalParam (label, p, Some default), rest'')
+          | Error err -> Error err)
+      | Ok (p, rest') -> Ok (Parse_tree.OptionalParam (label, p, None), rest')
+      | Error err -> Error err)
+  | OptLabel label :: rest ->
       (* Optional parameter without pattern *)
-      Ok (OptionalParam (label, ValueName label, None), rest)
+      Ok
+        ( Parse_tree.OptionalParam (label, Parse_tree.ValueName label, None),
+          rest )
   | _ -> (
       (* Simple parameter *)
       match parse_pattern tokens with
-      | Ok (p, rest) -> Ok (SimpleParam p, rest)
-      | Error e -> Error e)
+      | Ok (p, rest) -> Ok (Parse_tree.SimpleParam p, rest)
+      | Error err -> Error err)
 
 (* Parse let expressions *)
 and parse_let_expr tokens =
   match tokens with
-  | Let :: Rec :: rest -> (
+  | Token.Let :: Token.Rec :: rest -> (
       match parse_let_bindings [] rest with
-      | Ok (bindings, In :: rest') -> (
+      | Ok (bindings, Token.In :: rest') -> (
           match parse_expr rest' with
-          | Ok (body, rest'') -> Ok (LetRec (bindings, body), rest'')
-          | Error e -> Error e)
+          | Ok (body, rest'') -> Ok (Parse_tree.LetRec (bindings, body), rest'')
+          | Error err -> Error err)
       | _ -> Error "Expected 'in' after let bindings")
-  | Let :: Exception :: Ident name :: rest -> (
+  | Token.Let :: Token.Exception :: Token.Ident name :: rest -> (
       (* let exception *)
       match rest with
-      | In :: rest' -> (
+      | Token.In :: rest' -> (
           match parse_expr rest' with
-          | Ok (body, rest'') -> Ok (LetException (name, None, body), rest'')
-          | Error e -> Error e)
+          | Ok (body, rest'') ->
+              Ok (Parse_tree.LetException (name, None, body), rest'')
+          | Error err -> Error err)
       | _ -> Error "Expected 'in' after exception declaration")
-  | Let :: Module :: Ident name :: rest ->
+  | Token.Let :: Token.Module :: Token.Ident _ :: _ ->
       (* let module - simplified for now *)
       Error "let module not yet implemented"
-  | Let :: rest -> (
+  | Token.Let :: rest -> (
       match parse_let_bindings [] rest with
-      | Ok (bindings, In :: rest') -> (
+      | Ok (bindings, Token.In :: rest') -> (
           match parse_expr rest' with
-          | Ok (body, rest'') -> Ok (Let (bindings, body), rest'')
-          | Error e -> Error e)
+          | Ok (body, rest'') -> Ok (Parse_tree.Let (bindings, body), rest'')
+          | Error err -> Error err)
       | _ -> Error "Expected 'in' after let bindings")
   | _ -> parse_fun_expr tokens
 
@@ -2036,10 +2045,10 @@ and parse_let_bindings acc tokens =
   match parse_let_binding tokens with
   | Ok (binding, And :: rest) -> parse_let_bindings (binding :: acc) rest
   | Ok (binding, rest) -> Ok (List.rev (binding :: acc), rest)
-  | Error e -> (
+  | Error _ -> (
       (* Try to recover by skipping to 'in' or 'and' *)
       match skip_until_tokens [ Token.In; Token.And ] tokens with
-      | Token.And :: rest -> parse_let_bindings acc rest
+      | And :: rest -> parse_let_bindings acc rest
       | Token.In :: _ as rest -> Ok (List.rev acc, rest)
       | rest -> Ok (List.rev acc, rest))
 
@@ -2053,33 +2062,33 @@ and parse_let_binding_params pattern params tokens =
   | Ok (param, rest) -> parse_let_binding_params pattern (param :: params) rest
   | Error _ -> (
       match tokens with
-      | Colon :: rest -> (
+      | Token.Colon :: rest -> (
           match parse_typexpr rest with
-          | Ok (t, Eq :: rest') -> (
+          | Ok (t, Token.Eq :: rest') -> (
               match parse_expr rest' with
               | Ok (expr, rest'') ->
                   Ok
                     ( {
-                        pattern;
+                        Parse_tree.pattern;
                         params = List.rev params;
                         type_constraint = Some t;
                         expr;
                       },
                       rest'' )
-              | Error e -> Error e)
+              | Error err -> Error err)
           | _ -> Error "Expected '=' after type annotation")
       | Eq :: rest -> (
           match parse_expr rest with
           | Ok (expr, rest') ->
               Ok
                 ( {
-                    pattern;
+                    Parse_tree.pattern;
                     params = List.rev params;
                     type_constraint = None;
                     expr;
                   },
                   rest' )
-          | Error e -> Error e)
+          | Error err -> Error err)
       | _ -> Error "Expected '=' or ':' in let binding")
 
 (* Parse sequence expressions *)
@@ -2087,8 +2096,8 @@ and parse_sequence_expr tokens =
   match parse_let_expr tokens with
   | Ok (e1, Semicolon :: rest) -> (
       match parse_expr rest with
-      | Ok (e2, rest') -> Ok (Sequence (e1, e2), rest')
-      | Error e -> Error e)
+      | Ok (e2, rest') -> Ok (Parse_tree.Sequence (e1, e2), rest')
+      | Error err -> Error err)
   | result -> result
 
 (* Main expression parser *)
@@ -2104,10 +2113,9 @@ let parse_expr_from_lexer lexer =
           Error
             ("Unexpected tokens remaining: "
             ^ String.concat ~sep:" " (List.map remaining ~f:string_of_token))
-      | Error e -> Error e)
+      | Error err -> Error err)
   | Error e -> Error e
 
 let parse_expr_string str source =
   let lexer = Lexer.create str source in
   parse_expr_from_lexer lexer
-*)
