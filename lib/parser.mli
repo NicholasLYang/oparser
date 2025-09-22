@@ -132,3 +132,30 @@ val parse_expr_string : string -> Grace.Source.t -> expr parse_result
 
 (** Parse expression from token list *)
 val parse_expr : token list -> (expr * token list) parse_result
+
+(** Class type parsing functions *)
+
+(** Parse class type from lexer *)
+val parse_class_type_from_lexer : Lexer.t -> class_type parse_result
+
+(** Parse class type from string *)
+val parse_class_type_string : string -> Grace.Source.t -> class_type parse_result
+
+(** Top-level definition parsing functions *)
+
+(** Parse definition from lexer *)
+val parse_definition_from_lexer : Lexer.t -> definition parse_result
+
+(** Parse definition from string *)
+val parse_definition_string : string -> Grace.Source.t -> definition parse_result
+
+(** Parse module structure from lexer *)
+val parse_module_structure_from_lexer : Lexer.t -> definition list parse_result
+
+(** Parse module structure from string *)
+val parse_module_structure_string : string -> Grace.Source.t -> definition list parse_result
+
+(** Module type parsing functions *)
+
+(** Parse module type from token list *)
+val parse_module_type : token list -> (module_type * token list) parse_result

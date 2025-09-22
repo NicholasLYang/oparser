@@ -85,9 +85,15 @@ and poly_typexpr =
   | MonoType of typexpr (* typexpr *)
   | PolyType of ident list * typexpr (* { ' ident }+ . typexpr *)
 
-(* Polymorphic variant type (placeholder for now) *)
+(* Polymorphic variant type *)
 and polymorphic_variant_type =
-  unit (* TODO: Define when we encounter the grammar *)
+  | VariantClosed of variant_field list (* [ variant-field { | variant-field } ] *)
+  | VariantOpen of variant_field list (* [> variant-field { | variant-field } ] *)
+  | VariantLess of variant_field list * typexpr list (* [< variant-field { | variant-field } [> typexpr { & typexpr } ] ] *)
+
+and variant_field =
+  | TagField of tag_name * bool * typexpr list (* `tag-name [ of [&] typexpr { & typexpr } ] *)
+  | InheritField of typexpr (* typexpr *)
 
 (* Method type for object types *)
 and method_type = { method_name : method_name; poly_typexpr : poly_typexpr }
@@ -119,8 +125,165 @@ and record_pattern_field = {
 }
 [@@deriving sexp]
 
+(* Forward declarations needed for mutual recursion *)
+type constr_decl = {
+  constr_name: constr_name;
+  constr_args: constr_args;
+  constr_ret: typexpr option;
+}
+
+and constr_args =
+  | NoArgs
+  | TupleArgs of typexpr list
+  | RecordArgs of field_decl list
+
+and field_decl = {
+  field_name: field_name;
+  field_mutable: bool;
+  field_type: typexpr;
+}
+
+and module_params = parameter list
+
+and module_type =
+  | ModuleTypePath of modtype_path
+  | ModuleTypeSignature of module_signature
+  | ModuleTypeFunctor of module_name * module_type option * module_type
+  | ModuleTypeWith of module_type * with_constraint list
+  | ModuleTypeOf of module_expr
+
+and module_signature = specification list
+
+and specification =
+  | ValueSpec of value_name * typexpr
+  | TypeSpec of type_declaration list
+  | ExceptionSpec of constr_decl
+  | ModuleSpec of module_name * module_type
+  | ModuleTypeSpec of modtype_name * module_type option
+  | ClassSpec of class_specification list
+  | ClassTypeSpec of class_type_specification list
+  | IncludeSpec of module_type
+  | OpenSpec of module_path
+
+and type_declaration = {
+  type_name: typeconstr_name;
+  type_params: type_param list;
+  type_private: bool;
+  type_manifest: typexpr option;
+  type_kind: type_kind;
+  type_constraints: (typexpr * typexpr) list;
+}
+
+and type_param = {
+  param_name: ident;
+  param_variance: variance option;
+}
+
+and variance = Covariant | Contravariant
+
+and type_kind =
+  | TypeAbstract
+  | TypeVariant of constr_decl list
+  | TypeRecord of field_decl list
+  | TypeOpen
+
+and class_specification = {
+  class_virtual: bool;
+  class_params: type_param list;
+  class_name: class_name;
+  class_type: class_type;
+}
+
+and class_type_specification = {
+  classtype_virtual: bool;
+  classtype_params: type_param list;
+  classtype_name: class_name;
+  classtype_type: class_type;
+}
+
+and with_constraint =
+  | WithType of typeconstr_path * type_declaration
+  | WithModule of module_path * module_path
+
+and module_expr =
+  | ModuleExprPath of module_path
+  | ModuleExprStruct of module_structure
+  | ModuleExprFunctor of module_name * module_type option * module_expr
+  | ModuleExprApply of module_expr * module_expr
+  | ModuleExprConstraint of module_expr * module_type
+
+and module_structure = definition list
+
+and definition =
+  | ValueDef of let_binding list
+  | ValueRecDef of let_binding list
+  | TypeDef of type_declaration list
+  | ExceptionDef of constr_decl
+  | ModuleDef of module_name * module_expr
+  | ModuleTypeDef of modtype_name * module_type
+  | ClassDef of class_definition list
+  | ClassTypeDef of class_type_definition list
+  | IncludeDef of module_expr
+  | OpenDef of module_path
+
+and class_definition = {
+  class_virtual: bool;
+  class_params: type_param list;
+  class_name: class_name;
+  class_args: parameter list;
+  class_type_constraint: class_type option;
+  class_expr: class_expr;
+}
+
+and class_type_definition = {
+  classtype_virtual: bool;
+  classtype_params: type_param list;
+  classtype_name: class_name;
+  classtype_type: class_type;
+}
+
+and class_type =
+  | ClassBodyType of class_body_type
+  | ClassArrow of label_name option * bool * typexpr * class_type
+
+and class_body_type =
+  | ClassObject of typexpr option * class_field_spec list
+  | ClassPath of classtype_path
+  | ClassApp of typexpr list * classtype_path
+  | ClassOpen of module_path * class_body_type
+
+and class_field_spec =
+  | InheritSpec of class_body_type
+  | ValSpec of bool * bool * inst_var_name * typexpr (* mutable, virtual, name, type *)
+  | MethodSpec of bool * bool * method_name * poly_typexpr (* private, virtual, name, type *)
+  | ConstraintSpec of typexpr * typexpr
+
+and class_expr =
+  | ClassPath of class_path
+  | ClassApp of typexpr list * class_path
+  | ClassParenthesized of class_expr
+  | ClassConstrained of class_expr * class_type
+  | ClassAppl of class_expr * argument list
+  | ClassFun of parameter list * class_expr
+  | ClassLet of let_binding list * class_expr
+  | ClassLetRec of let_binding list * class_expr
+  | ClassObject of class_field list
+  | ClassOpen of module_path * class_expr
+
+and class_field =
+  | InheritField of class_expr * value_name option
+  | ValField of bool * inst_var_name * typexpr option * expr (* mutable, name, type, expr *)
+  | MethodField of bool * method_name * parameter list * typexpr option * expr (* private, name, params, type, expr *)
+  | VirtualMethod of bool * method_name * poly_typexpr (* private, name, type *)
+  | InitializerField of expr
+
+and object_expr = {
+  self_pattern: pattern option;
+  fields: class_field list;
+}
+
 (* Expression types *)
-type expr =
+and expr =
   | ConstantExpr of constant (* constant *)
   | ValuePathExpr of value_path (* value-path *)
   | ParenthesizedExpr of expr (* ( expr ) *)
@@ -159,8 +322,11 @@ type expr =
   | SubtypingCoercion of expr * typexpr * typexpr (* ( expr : typexpr :> typexpr ) *)
   | Assert of expr (* assert expr *)
   | Lazy of expr (* lazy expr *)
+  | Raise of expr (* raise expr *)
   | LocalOpen of module_path * expr (* let open module-path in expr OR module-path.( expr ) *)
   | ObjectExpr of object_expr (* object class-body end *)
+  | MethodCall of expr * method_name * argument list (* expr#method {argument}* *)
+  | NewInstance of class_path * argument list (* new class-path {argument}* *)
 [@@deriving sexp]
 
 and for_direction = 
@@ -203,14 +369,6 @@ and record_field = {
 }
 [@@deriving sexp]
 
-(* Placeholder types for now *)
-and constr_decl = unit (* TODO: Define constructor declaration *)
-and module_params = unit (* TODO: Define module parameters *)
-and module_type = unit (* TODO: Define module type *)
-and module_expr = unit (* TODO: Define module expression *)
-and object_expr = unit (* TODO: Define object expression *)
-[@@deriving sexp]
-
 (* Parse tree for complete constructs *)
 type parse_tree =
   | TypeExpr of typexpr
@@ -226,6 +384,13 @@ type parse_tree =
   | Constant of constant
   | Pattern of pattern
   | Expr of expr
+  | ClassTypeTree of class_type
+  | ClassExpr of class_expr
+  | ClassField of class_field
+  | ClassDefinition of class_definition
+  | ModuleType of module_type
+  | ModuleExpr of module_expr
+  | Definition of definition
 [@@deriving sexp]
 
 (* Pretty printing functions *)
@@ -400,8 +565,11 @@ let rec string_of_expr = function
   | SubtypingCoercion (e, t1, t2) -> "(" ^ string_of_expr e ^ " : " ^ string_of_typexpr t1 ^ " :> " ^ string_of_typexpr t2 ^ ")"
   | Assert e -> "assert " ^ string_of_expr e
   | Lazy e -> "lazy " ^ string_of_expr e
+  | Raise e -> "raise " ^ string_of_expr e
   | LocalOpen (path, e) -> "let open " ^ String.concat ~sep:"." path ^ " in " ^ string_of_expr e
   | ObjectExpr _ -> "object ... end"
+  | MethodCall (obj, method_name, _) -> string_of_expr obj ^ "#" ^ method_name
+  | NewInstance (class_path, _) -> "new " ^ string_of_class_path class_path
 
 and string_of_argument = function
   | SimpleArg e -> string_of_expr e
@@ -446,6 +614,13 @@ let string_of_parse_tree = function
   | Constant c -> "Constant: " ^ string_of_constant c
   | Pattern p -> "Pattern: " ^ string_of_pattern p
   | Expr e -> "Expr: " ^ string_of_expr e
+  | ClassTypeTree _ -> "ClassType: [class-type]"
+  | ClassExpr _ -> "ClassExpr: [class-expr]"
+  | ClassField _ -> "ClassField: [class-field]"
+  | ClassDefinition _ -> "ClassDefinition: [class-definition]"
+  | ModuleType _ -> "ModuleType: [module-type]"
+  | ModuleExpr _ -> "ModuleExpr: [module-expr]"
+  | Definition _ -> "Definition: [definition]"
 
 (* Helper functions for creating parse tree nodes *)
 let make_type_var id = TypeVar id
@@ -459,7 +634,7 @@ let make_type_app_multi types path = TypeAppMulti (types, path)
 let make_type_as t id = TypeAs (t, id)
 let make_object_empty () = ObjectEmpty
 let make_object methods has_semi has_dots = Object (methods, has_semi, has_dots)
-let make_classtype path = ClassType path
+let make_classtype path = ClassType path (* typexpr constructor *)
 let make_classtype_app t path = ClassTypeApp (t, path)
 let make_classtype_app_multi types path = ClassTypeAppMulti (types, path)
 let make_mono_type t = MonoType t

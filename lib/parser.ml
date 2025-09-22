@@ -1143,6 +1143,118 @@ and parse_app_continuation t tokens =
  * - Object types: < method : int >, < .. >
  * - Class types: #class_name, #Module.class_name
  *)
+(* Polymorphic variant type parsing *)
+and parse_polymorphic_variant_type tokens =
+  match consume_token tokens with
+  | Some Token.LBracket, rest -> 
+      parse_polymorphic_variant_body rest
+  | _ -> Error "Expected '['"
+
+and parse_polymorphic_variant_body tokens =
+  match peek_token tokens with
+  | Some Token.Gt -> 
+      (* [> variant-field { | variant-field } ] *)
+      parse_open_variant tokens
+  | Some Token.Lt -> 
+      (* [< variant-field { | variant-field } [> typexpr { & typexpr } ] ] *)
+      parse_less_variant tokens
+  | _ -> 
+      (* [ variant-field { | variant-field } ] *)
+      parse_closed_variant tokens
+
+and parse_open_variant tokens =
+  match consume_token tokens with
+  | Some Token.Gt, rest -> (
+      match parse_variant_fields [] rest with
+      | Ok (fields, Token.RBracket :: rest') -> 
+          Ok (Parse_tree.PolymorphicVariant (Parse_tree.VariantOpen fields), rest')
+      | _ -> Error "Expected ']' after polymorphic variant")
+  | _ -> Error "Expected '>'"
+
+and parse_less_variant tokens =
+  match consume_token tokens with
+  | Some Token.Lt, rest -> (
+      match parse_variant_fields [] rest with
+      | Ok (fields, rest') -> 
+          parse_less_variant_constraint fields rest'
+      | Error err -> Error err)
+  | _ -> Error "Expected '<'"
+
+and parse_less_variant_constraint fields tokens =
+  match peek_token tokens with
+  | Some Token.Gt -> (
+      match consume_token tokens with
+      | Some Token.Gt, rest -> (
+          match parse_and_separated_types [] rest with
+          | Ok (types, Token.RBracket :: rest') ->
+              Ok (Parse_tree.PolymorphicVariant (Parse_tree.VariantLess (fields, types)), rest')
+          | _ -> Error "Expected ']' after polymorphic variant")
+      | _ -> Error "Expected '>'")
+  | Some Token.RBracket -> (
+      match consume_token tokens with
+      | Some Token.RBracket, rest ->
+          Ok (Parse_tree.PolymorphicVariant (Parse_tree.VariantLess (fields, [])), rest)
+      | _ -> Error "Expected ']'")
+  | _ -> Error "Expected ']' or '>'"
+
+and parse_closed_variant tokens =
+  match parse_variant_fields [] tokens with
+  | Ok (fields, Token.RBracket :: rest) -> 
+      Ok (Parse_tree.PolymorphicVariant (Parse_tree.VariantClosed fields), rest)
+  | _ -> Error "Expected ']' after polymorphic variant"
+
+and parse_variant_fields acc tokens =
+  match tokens with
+  | Token.RBracket :: _ -> Ok (List.rev acc, tokens)
+  | Token.Gt :: _ -> Ok (List.rev acc, tokens)
+  | _ -> (
+      match parse_variant_field tokens with
+      | Ok (field, rest) -> (
+          match peek_token rest with
+          | Some Token.Bar -> (
+              match consume_token rest with
+              | Some Token.Bar, rest' -> parse_variant_fields (field :: acc) rest'
+              | _ -> Error "Expected '|'")
+          | _ -> Ok (List.rev (field :: acc), rest))
+      | Error err -> Error err)
+
+and parse_variant_field tokens =
+  match tokens with
+  | Token.PolymorphicVariantTag tag :: rest -> (
+      (* `tag-name [ of [&] typexpr { & typexpr } ] *)
+      match peek_token rest with
+      | Some Token.Of -> (
+          match consume_token rest with
+          | Some Token.Of, rest' -> (
+              (* Check for & at the beginning *)
+              let (has_ampersand, rest'') = 
+                match peek_token rest' with
+                | Some (Token.InfixOp "&") -> (true, snd (consume_token rest'))
+                | _ -> (false, rest')
+              in
+              match parse_and_separated_types [] rest'' with
+              | Ok (types, rest''') -> 
+                  Ok (Parse_tree.TagField (tag, has_ampersand, types), rest''')
+              | Error err -> Error err)
+          | _ -> Error "Expected 'of'")
+      | _ -> Ok (Parse_tree.TagField (tag, false, []), rest))
+  | _ -> (
+      (* typexpr - inheritance *)
+      match parse_typexpr tokens with
+      | Ok (t, rest) -> Ok (Parse_tree.InheritField t, rest)
+      | Error err -> Error err)
+
+and parse_and_separated_types acc tokens =
+  match parse_typexpr tokens with
+  | Ok (t, rest) -> (
+      match peek_token rest with
+      | Some (Token.InfixOp "&") -> (
+          match consume_token rest with
+          | Some (Token.InfixOp "&"), rest' -> parse_and_separated_types (t :: acc) rest'
+          | _ -> Error "Expected '&'")
+      | _ -> Ok (List.rev (t :: acc), rest))
+  | Error err -> Error err
+
 and parse_primary_type tokens =
   match peek_token tokens with
   | Some Quote -> (
@@ -1160,6 +1272,7 @@ and parse_primary_type tokens =
       | Some (Ident "_"), rest -> Ok (make_wildcard (), rest)
       | _ -> Error "Expected wildcard")
   | Some LParen -> parse_parenthesized_type tokens
+  | Some LBracket -> parse_polymorphic_variant_type tokens
   | Some Lt -> parse_object_type tokens
   | Some Hash -> parse_class_type tokens
   | Some (Ident name) when validate_lowercase_ident name -> (
@@ -1319,6 +1432,203 @@ and parse_classtype_path tokens =
               | _ -> Error "Expected class name after module path")
           | Error _ -> Error "Expected class name"))
   | _ -> Error "Expected class name"
+
+(* Full class type parsing functions *)
+
+(* Parse complete class types according to OCaml grammar:
+ * class-type ::=
+ *   [?label-name:] typexpr -> class-type
+ *   | class-body-type
+ *)
+and parse_full_class_type tokens = parse_class_arrow_type tokens
+
+and parse_class_arrow_type tokens =
+  match parse_class_body_type tokens with
+  | Ok (class_body, rest) -> (
+      match peek_token rest with
+      | Some RightArrow -> (
+          match consume_token rest with
+          | Some RightArrow, rest' -> (
+              match parse_full_class_type rest' with
+              | Ok (next_class_type, rest'') ->
+                  Ok (Parse_tree.ClassArrow (None, false, 
+                      Parse_tree.TypeConstr (None, "unit"), next_class_type), rest'')
+              | Error err -> Error err)
+          | _ -> Error "Expected '->'")
+      | _ -> Ok (Parse_tree.ClassBodyType class_body, rest))
+  | Error err -> Error err
+
+(* TODO: Implement labeled class arrows when needed *)
+
+(* Parse class body types:
+ * class-body-type ::=
+ *   object [typexpr] { class-field-spec } end
+ *   | [typexpr {, typexpr}] classtype-path
+ *   | let open module-path in class-body-type
+ *)
+and parse_class_body_type tokens =
+  match peek_token tokens with
+  | Some Object -> parse_class_object_type tokens
+  | Some Let -> parse_class_let_open tokens
+  | _ -> parse_class_type_application tokens
+
+and parse_class_object_type tokens =
+  match consume_token tokens with
+  | Some Object, rest -> (
+      (* Parse optional self type: object [typexpr] *)
+      let (self_type, rest') = 
+        match parse_typexpr rest with
+        | Ok (t, rest'') -> (Some t, rest'')
+        | Error _ -> (None, rest)
+      in
+      (* Parse class field specs *)
+      parse_class_field_specs [] self_type rest')
+  | _ -> Error "Expected 'object'"
+
+and parse_class_field_specs acc self_type tokens =
+  match peek_token tokens with
+  | Some End -> (
+      match consume_token tokens with
+      | Some End, rest -> 
+          Ok (Parse_tree.ClassObject (self_type, List.rev acc), rest)
+      | _ -> Error "Expected 'end'")
+  | _ -> (
+      match parse_class_field_spec tokens with
+      | Ok (field_spec, rest) -> 
+          parse_class_field_specs (field_spec :: acc) self_type rest
+      | Error _ when List.is_empty acc -> 
+          (* No field specs, just end *)
+          (match consume_token tokens with
+          | Some End, rest -> 
+              Ok (Parse_tree.ClassObject (self_type, []), rest)
+          | _ -> Error "Expected class field spec or 'end'")
+      | Error err -> Error err)
+
+and parse_class_field_spec tokens =
+  match peek_token tokens with
+  | Some Inherit -> parse_inherit_spec tokens
+  | Some Val -> parse_val_spec tokens
+  | Some Method -> parse_method_spec tokens
+  | Some Constraint -> parse_constraint_spec tokens
+  | _ -> Error "Expected 'inherit', 'val', 'method', or 'constraint'"
+
+and parse_inherit_spec tokens =
+  match consume_token tokens with
+  | Some Inherit, rest -> (
+      match parse_class_body_type rest with
+      | Ok (class_body, rest') ->
+          Ok (Parse_tree.InheritSpec class_body, rest')
+      | Error err -> Error err)
+  | _ -> Error "Expected 'inherit'"
+
+and parse_val_spec tokens =
+  match consume_token tokens with
+  | Some Val, rest -> (
+      let (is_mutable, rest') = 
+        match peek_token rest with
+        | Some Mutable -> (true, snd (consume_token rest))
+        | _ -> (false, rest)
+      in
+      let (is_virtual, rest'') = 
+        match peek_token rest' with
+        | Some Virtual -> (true, snd (consume_token rest'))
+        | _ -> (false, rest')
+      in
+      match consume_token rest'' with
+      | Some (Ident name), rest''' when validate_lowercase_ident name -> (
+          match expect_colon rest''' with
+          | Ok rest'''' -> (
+              match parse_typexpr rest'''' with
+              | Ok (t, rest''''') ->
+                  Ok (Parse_tree.ValSpec (is_mutable, is_virtual, name, t), rest''''')
+              | Error err -> Error err)
+          | Error err -> Error err)
+      | _ -> Error "Expected instance variable name")
+  | _ -> Error "Expected 'val'"
+
+and parse_method_spec tokens =
+  match consume_token tokens with
+  | Some Method, rest -> (
+      let (is_private, rest') = 
+        match peek_token rest with
+        | Some Private -> (true, snd (consume_token rest))
+        | _ -> (false, rest)
+      in
+      let (is_virtual, rest'') = 
+        match peek_token rest' with
+        | Some Virtual -> (true, snd (consume_token rest'))
+        | _ -> (false, rest')
+      in
+      match consume_token rest'' with
+      | Some (Ident name), rest''' when validate_lowercase_ident name -> (
+          match expect_colon rest''' with
+          | Ok rest'''' -> (
+              match parse_poly_typexpr rest'''' with
+              | Ok (poly_t, rest''''') ->
+                  Ok (Parse_tree.MethodSpec (is_private, is_virtual, name, poly_t), rest''''')
+              | Error err -> Error err)
+          | Error err -> Error err)
+      | _ -> Error "Expected method name")
+  | _ -> Error "Expected 'method'"
+
+and parse_constraint_spec tokens =
+  match consume_token tokens with
+  | Some Constraint, rest -> (
+      match parse_typexpr rest with
+      | Ok (t1, Eq :: rest') -> (
+          match parse_typexpr rest' with
+          | Ok (t2, rest'') ->
+              Ok (Parse_tree.ConstraintSpec (t1, t2), rest'')
+          | Error err -> Error err)
+      | _ -> Error "Expected type constraint 'type = type'")
+  | _ -> Error "Expected 'constraint'"
+
+and parse_class_let_open tokens =
+  match consume_token tokens with
+  | Some Let, Open :: rest -> (
+      match parse_module_path rest with
+      | Ok (module_path, In :: rest') -> (
+          match parse_class_body_type rest' with
+          | Ok (class_body, rest'') ->
+              Ok (Parse_tree.ClassOpen (module_path, class_body), rest'')
+          | Error err -> Error err)
+      | _ -> Error "Expected module path and 'in'")
+  | _ -> Error "Expected 'let open'"
+
+and parse_class_type_application tokens =
+  (* Parse [typexpr {, typexpr}] classtype-path *)
+  match peek_token tokens with
+  | Some LParen -> (
+      (* Multiple type parameters: (t1, t2, ...) classtype-path *)
+      match consume_token tokens with
+      | Some LParen, rest -> (
+          match parse_comma_separated_list parse_typexpr rest with
+          | Ok (types, RParen :: rest') -> (
+              match parse_classtype_path rest' with
+              | Ok (ct_path, rest'') ->
+                  Ok (Parse_tree.ClassApp (types, ct_path), rest'')
+              | Error err -> Error err)
+          | _ -> Error "Expected ')' after type parameters")
+      | _ -> Error "Expected '('")
+  | _ -> (
+      (* Try single type parameter or no parameters *)
+      match parse_typexpr tokens with
+      | Ok (t, rest) -> (
+          match parse_classtype_path rest with
+          | Ok (ct_path, rest') ->
+              Ok (Parse_tree.ClassApp ([t], ct_path), rest')
+          | Error _ -> 
+              (* No classtype path, might just be a standalone classtype path *)
+              (match parse_classtype_path tokens with
+              | Ok (ct_path, rest') ->
+                  Ok (Parse_tree.ClassPath ct_path, rest')
+              | Error err -> Error err))
+      | Error _ -> 
+          (* Try just classtype path *)
+          (match parse_classtype_path tokens with
+          | Ok (ct_path, rest) ->
+              Ok (Parse_tree.ClassPath ct_path, rest)
+          | Error err -> Error err))
 
 (* Lexer integration functions *)
 
@@ -1495,12 +1805,24 @@ let rec parse_primary_expr tokens =
       (* Could be parenthesized expr, tuple, or type constraint *)
       match parse_expr rest with
       | Ok (e, Colon :: rest') -> (
-          (* Type constraint *)
+          (* Type constraint or subtyping coercion *)
           match parse_typexpr rest' with
+          | Ok (t, ColonGt :: rest'') -> (
+              (* Subtyping coercion (expr : type :> type) *)
+              match parse_typexpr rest'' with
+              | Ok (t2, RParen :: rest''') ->
+                  Ok (Parse_tree.SubtypingCoercion (e, t, t2), rest''')
+              | _ -> Error "Expected type and ')' after ':>'")
           | Ok (t, RParen :: rest'') ->
               Ok (Parse_tree.TypeConstraint (e, t), rest'')
-          | Ok (_, _) -> Error "Expected ')' after type constraint"
+          | Ok (_, _) -> Error "Expected ')' or ':>' after type"
           | Error err -> Error err)
+      | Ok (e, ColonGt :: rest') -> (
+          (* Direct coercion (expr :> type) *)
+          match parse_typexpr rest' with
+          | Ok (t, RParen :: rest'') ->
+              Ok (Parse_tree.Coercion (e, t), rest'')
+          | _ -> Error "Expected type and ')' after ':>'")
       | Ok (e, Comma :: rest') ->
           (* Tuple *)
           parse_tuple_elements [ e ] rest'
@@ -1526,13 +1848,34 @@ let rec parse_primary_expr tokens =
       match parse_primary_expr rest with
       | Ok (e, rest') -> Ok (Parse_tree.Assert e, rest')
       | Error err -> Error err)
+  | Ident "raise" :: rest -> (
+      match parse_primary_expr rest with
+      | Ok (e, rest') -> Ok (Parse_tree.Raise e, rest')
+      | Error err -> Error err)
+  | New :: rest -> (
+      (* New instance creation *)
+      match parse_class_path rest with
+      | Ok (class_path, rest') ->
+          parse_new_instance_args class_path [] rest'
+      | Error err -> Error err)
+  | Object :: rest -> (
+      (* Object expression: object [self-pattern] { class-field } end *)
+      parse_object_expression rest)
   | _ :: _ -> (
-      (* Try to parse as value path or constructor *)
+      (* Try to parse as value path, constructor, or Module.(expr) *)
       match parse_value_path tokens with
       | Ok (path, rest) -> Ok (Parse_tree.ValuePathExpr path, rest)
       | Error _ -> (
-          match parse_constr tokens with
-          | Ok (path, rest) -> (
+          (* Try module path for Module.(expr) syntax *)
+          match parse_module_path tokens with
+          | Ok (module_path, Dot :: LParen :: rest) -> (
+              match parse_expr rest with
+              | Ok (e, RParen :: rest') ->
+                  Ok (Parse_tree.LocalOpen (module_path, e), rest')
+              | _ -> Error "Expected expression and ')' after 'Module.('")
+          | _ -> (
+              match parse_constr tokens with
+              | Ok (path, rest) -> (
               (* Check if constructor has an argument *)
               match rest with
               | LParen :: _
@@ -1548,7 +1891,7 @@ let rec parse_primary_expr tokens =
                   | Error _ -> Ok (Parse_tree.ConstructorExpr (path, None), rest)
                   )
               | _ -> Ok (Parse_tree.ConstructorExpr (path, None), rest))
-          | Error err -> Error err))
+          | Error err -> Error err)))
 
 and parse_tuple_elements acc tokens =
   match parse_expr tokens with
@@ -1701,6 +2044,15 @@ and parse_postfix_cont expr tokens =
               (* Field access *)
               parse_postfix_cont (Parse_tree.FieldAccess (expr, field)) rest'
           | Error err -> Error err))
+  | Hash :: rest -> (
+      (* Method call *)
+      match rest with
+      | token :: rest' -> (
+          match parse_method_name token with
+          | Ok method_name ->
+              parse_method_call_args expr method_name [] rest'
+          | Error err -> Error err)
+      | [] -> Error "Expected method name after '#'")
   | _ ->
       (* Try function application *)
       parse_function_app expr [] tokens
@@ -1711,6 +2063,195 @@ and parse_function_app func args tokens =
   | Error _ ->
       if List.is_empty args then Ok (func, tokens)
       else Ok (Parse_tree.FunctionApp (func, List.rev args), tokens)
+
+and parse_method_call_args obj method_name args tokens =
+  match parse_argument tokens with
+  | Ok (arg, rest) -> parse_method_call_args obj method_name (arg :: args) rest
+  | Error _ ->
+      if List.is_empty args then
+        parse_postfix_cont (Parse_tree.MethodCall (obj, method_name, [])) tokens
+      else
+        parse_postfix_cont
+          (Parse_tree.MethodCall (obj, method_name, List.rev args))
+          tokens
+
+and parse_new_instance_args class_path args tokens =
+  match parse_argument tokens with
+  | Ok (arg, rest) -> parse_new_instance_args class_path (arg :: args) rest
+  | Error _ ->
+      if List.is_empty args then
+        Ok (Parse_tree.NewInstance (class_path, []), tokens)
+      else
+        Ok (Parse_tree.NewInstance (class_path, List.rev args), tokens)
+
+and parse_object_expression tokens =
+  (* Parse object [self-pattern] { class-field } end *)
+  let (self_pattern, rest) = parse_optional_self_pattern tokens in
+  parse_object_fields [] self_pattern rest
+
+and parse_optional_self_pattern tokens =
+  (* Try to parse self pattern, if it fails, assume no self pattern *)
+  match parse_pattern tokens with
+  | Ok (pattern, rest) -> (Some pattern, rest)
+  | Error _ -> (None, tokens)
+
+and parse_object_fields acc self_pattern tokens =
+  match peek_token tokens with
+  | Some End -> (
+      match consume_token tokens with
+      | Some End, rest -> 
+          Ok (Parse_tree.ObjectExpr { self_pattern; fields = List.rev acc }, rest)
+      | _ -> Error "Expected 'end'")
+  | _ -> (
+      match parse_object_field tokens with
+      | Ok (field, rest) -> 
+          parse_object_fields (field :: acc) self_pattern rest
+      | Error _ when List.is_empty acc -> 
+          (* No fields, just end *)
+          (match consume_token tokens with
+          | Some End, rest -> 
+              Ok (Parse_tree.ObjectExpr { self_pattern; fields = [] }, rest)
+          | _ -> Error "Expected object field or 'end'")
+      | Error err -> Error err)
+
+and parse_object_field tokens =
+  match peek_token tokens with
+  | Some Inherit -> parse_object_inherit_field tokens
+  | Some Val -> parse_object_val_field tokens
+  | Some Method -> parse_object_method_field tokens
+  | Some Initializer -> parse_object_initializer_field tokens
+  | _ -> Error "Expected 'inherit', 'val', 'method', or 'initializer'"
+
+and parse_object_inherit_field tokens =
+  match consume_token tokens with
+  | Some Inherit, rest -> (
+      match parse_class_path rest with
+      | Ok (class_path, rest') -> 
+          let class_expr : class_expr = ClassPath class_path in
+          (* Check for optional 'as' clause *)
+          (match peek_token rest' with
+          | Some As -> (
+              match consume_token rest' with
+              | Some As, rest'' -> (
+                  match consume_token rest'' with
+                  | Some (Ident name), rest''' when validate_lowercase_ident name ->
+                      Ok (Parse_tree.InheritField (class_expr, Some name), rest''')
+                  | _ -> Error "Expected lowercase identifier after 'as'")
+              | _ -> Error "Expected 'as'")
+          | _ -> Ok (Parse_tree.InheritField (class_expr, None), rest'))
+      | Error err -> Error err)
+  | _ -> Error "Expected 'inherit'"
+
+and parse_object_val_field tokens =
+  match consume_token tokens with
+  | Some Val, rest -> (
+      let (is_mutable, rest') = 
+        match peek_token rest with
+        | Some Mutable -> (true, snd (consume_token rest))
+        | _ -> (false, rest)
+      in
+      match consume_token rest' with
+      | Some (Ident name), rest'' when validate_lowercase_ident name -> (
+          (* Parse optional type annotation *)
+          let (type_opt, rest''') = 
+            match peek_token rest'' with
+            | Some Colon -> (
+                match consume_token rest'' with
+                | Some Colon, rest_colon -> (
+                    match parse_typexpr rest_colon with
+                    | Ok (t, rest_type) -> (Some t, rest_type)
+                    | Error _ -> (None, rest''))
+                | _ -> (None, rest''))
+            | _ -> (None, rest'')
+          in
+          match consume_token rest''' with
+          | Some Eq, rest'''' -> (
+              match parse_expr rest'''' with
+              | Ok (expr, rest''''') ->
+                  Ok (Parse_tree.ValField (is_mutable, name, type_opt, expr), rest''''')
+              | Error err -> Error err)
+          | _ -> Error "Expected '=' after instance variable")
+      | _ -> Error "Expected instance variable name")
+  | _ -> Error "Expected 'val'"
+
+and parse_object_method_field tokens =
+  match consume_token tokens with
+  | Some Method, rest -> (
+      (* Check for 'virtual' first *)
+      let (is_virtual, rest') = 
+        match peek_token rest with
+        | Some Virtual -> (true, snd (consume_token rest))
+        | _ -> (false, rest)
+      in
+      if is_virtual then
+        parse_virtual_method_field is_virtual rest'
+      else
+        parse_concrete_method_field rest')
+  | _ -> Error "Expected 'method'"
+
+and parse_virtual_method_field _is_virtual tokens =
+  let (is_private, rest) = 
+    match peek_token tokens with
+    | Some Private -> (true, snd (consume_token tokens))
+    | _ -> (false, tokens)
+  in
+  match consume_token rest with
+  | Some (Ident name), rest' when validate_lowercase_ident name -> (
+      match consume_token rest' with
+      | Some Colon, rest'' -> (
+          match parse_poly_typexpr rest'' with
+          | Ok (poly_t, rest''') ->
+              Ok (Parse_tree.VirtualMethod (is_private, name, poly_t), rest''')
+          | Error err -> Error err)
+      | _ -> Error "Expected ':' after virtual method name")
+  | _ -> Error "Expected method name"
+
+and parse_concrete_method_field tokens =
+  let (is_private, rest) = 
+    match peek_token tokens with
+    | Some Private -> (true, snd (consume_token tokens))
+    | _ -> (false, tokens)
+  in
+  match consume_token rest with
+  | Some (Ident name), rest' when validate_lowercase_ident name -> (
+      (* Parse parameters *)
+      parse_method_parameters [] name is_private rest')
+  | _ -> Error "Expected method name"
+
+and parse_method_parameters acc method_name is_private tokens =
+  match parse_parameter tokens with
+  | Ok (param, rest) -> 
+      parse_method_parameters (param :: acc) method_name is_private rest
+  | Error _ -> 
+      (* No more parameters, parse optional type annotation and body *)
+      let params = List.rev acc in
+      let (type_opt, rest') = 
+        match peek_token tokens with
+        | Some Colon -> (
+            match consume_token tokens with
+            | Some Colon, rest_colon -> (
+                match parse_typexpr rest_colon with
+                | Ok (t, rest_type) -> (Some t, rest_type)
+                | Error _ -> (None, tokens))
+            | _ -> (None, tokens))
+        | _ -> (None, tokens)
+      in
+      match consume_token rest' with
+      | Some Eq, rest'' -> (
+          match parse_expr rest'' with
+          | Ok (expr, rest''') ->
+              Ok (Parse_tree.MethodField (is_private, method_name, params, type_opt, expr), rest''')
+          | Error err -> Error err)
+      | _ -> Error "Expected '=' after method"
+
+and parse_object_initializer_field tokens =
+  match consume_token tokens with
+  | Some Initializer, rest -> (
+      match parse_expr rest with
+      | Ok (expr, rest') ->
+          Ok (Parse_tree.InitializerField expr, rest')
+      | Error err -> Error err)
+  | _ -> Error "Expected 'initializer'"
 
 and parse_argument tokens =
   match tokens with
@@ -2029,6 +2570,15 @@ and parse_let_expr tokens =
               Ok (Parse_tree.LetException (name, None, body), rest'')
           | Error err -> Error err)
       | _ -> Error "Expected 'in' after exception declaration")
+  | Token.Let :: Token.Open :: rest -> (
+      (* let open Module in expr *)
+      match parse_module_path rest with
+      | Ok (module_path, Token.In :: rest') -> (
+          match parse_expr rest' with
+          | Ok (body, rest'') ->
+              Ok (Parse_tree.LocalOpen (module_path, body), rest'')
+          | Error err -> Error err)
+      | _ -> Error "Expected module path and 'in' after 'let open'")
   | Token.Let :: Token.Module :: Token.Ident _ :: _ ->
       (* let module - simplified for now *)
       Error "let module not yet implemented"
@@ -2119,3 +2669,385 @@ let parse_expr_from_lexer lexer =
 let parse_expr_string str source =
   let lexer = Lexer.create str source in
   parse_expr_from_lexer lexer
+
+(* Class type parsing functions *)
+let parse_class_type_from_lexer lexer =
+  match tokens_from_lexer lexer with
+  | Ok tokens -> (
+      match parse_full_class_type tokens with
+      | Ok (class_type, []) -> Ok class_type
+      | Ok (_, remaining) ->
+          Error
+            ("Unexpected tokens remaining: "
+            ^ String.concat ~sep:" " (List.map remaining ~f:string_of_token))
+      | Error err -> Error err)
+  | Error e -> Error e
+
+let parse_class_type_string str source =
+  let lexer = Lexer.create str source in
+  parse_class_type_from_lexer lexer
+
+(* Top-level definition parsing functions *)
+let rec parse_definition tokens =
+  match tokens with
+  | Token.Let :: Token.Rec :: rest -> parse_value_rec_def rest
+  | Token.Let :: rest -> parse_value_def rest
+  | Token.Type :: rest -> parse_type_def rest
+  | Token.Exception :: rest -> parse_exception_def rest
+  | Token.Module :: Token.Type :: rest -> parse_module_type_def rest
+  | Token.Module :: rest -> parse_module_def rest
+  | Token.Class :: rest -> parse_class_def rest
+  | Token.Open :: rest -> parse_open_def rest
+  | Token.Include :: rest -> parse_include_def rest
+  | _ -> Error "Expected top-level definition"
+
+and parse_value_def tokens =
+  match parse_let_bindings [] tokens with
+  | Ok (bindings, rest) -> Ok (Parse_tree.ValueDef bindings, rest)
+  | Error err -> Error err
+
+and parse_value_rec_def tokens =
+  match parse_let_bindings [] tokens with
+  | Ok (bindings, rest) -> Ok (Parse_tree.ValueRecDef bindings, rest)
+  | Error err -> Error err
+
+and parse_type_def tokens =
+  match parse_type_declarations [] tokens with
+  | Ok (decls, rest) -> Ok (Parse_tree.TypeDef decls, rest)
+  | Error err -> Error err
+
+and parse_type_declarations acc tokens =
+  match parse_type_declaration tokens with
+  | Ok (decl, Token.And :: rest) -> parse_type_declarations (decl :: acc) rest
+  | Ok (decl, rest) -> Ok (List.rev (decl :: acc), rest)
+  | Error err -> Error err
+
+and parse_type_declaration tokens =
+  (* Parse type parameters *)
+  let (params, rest) = parse_type_params [] tokens in
+  match rest with
+  | Token.Ident type_name :: rest' when validate_lowercase_ident type_name -> (
+      (* Parse private flag *)
+      let (is_private, rest'') = 
+        match rest' with
+        | Token.Private :: rest''' -> (true, rest''')
+        | _ -> (false, rest')
+      in
+      (* Parse manifest (= typexpr) *)
+      let (manifest, rest''') = 
+        match rest'' with
+        | Token.Eq :: rest_eq -> (
+            match parse_typexpr rest_eq with
+            | Ok (t, rest_type) -> (Some t, rest_type)
+            | Error _ -> (None, rest''))
+        | _ -> (None, rest'')
+      in
+      (* Parse type kind and constraints *)
+      let (kind, constraints, rest'''') = parse_type_kind_and_constraints rest''' in
+      Ok ({
+        Parse_tree.type_name;
+        type_params = params;
+        type_private = is_private;
+        type_manifest = manifest;
+        type_kind = kind;
+        type_constraints = constraints;
+      }, rest''''))
+  | _ -> Error "Expected type name"
+
+and parse_type_params acc tokens =
+  match tokens with
+  | Token.Quote :: Token.Ident param :: rest when validate_lowercase_ident param -> 
+      parse_type_params ({ Parse_tree.param_name = param; param_variance = None } :: acc) rest
+  | Token.LParen :: Token.Quote :: Token.Ident param :: Token.Comma :: rest when validate_lowercase_ident param ->
+      (* Multiple parameters: ('a, 'b) *)
+      parse_multi_type_params [{ Parse_tree.param_name = param; param_variance = None }] rest
+  | _ -> (List.rev acc, tokens)
+
+and parse_multi_type_params acc tokens =
+  match tokens with
+  | Token.Quote :: Token.Ident param :: Token.Comma :: rest when validate_lowercase_ident param ->
+      parse_multi_type_params ({ Parse_tree.param_name = param; param_variance = None } :: acc) rest
+  | Token.Quote :: Token.Ident param :: Token.RParen :: rest when validate_lowercase_ident param ->
+      (List.rev ({ Parse_tree.param_name = param; param_variance = None } :: acc), rest)
+  | _ -> (List.rev acc, tokens)
+
+and parse_type_kind_and_constraints tokens =
+  match tokens with
+  | Token.Eq :: Token.Bar :: rest -> 
+      (* Variant type *)
+      let (constrs, rest') = parse_constructor_declarations [] rest in
+      (Parse_tree.TypeVariant constrs, [], rest')
+  | Token.Eq :: Token.LBrace :: rest ->
+      (* Record type *)
+      let (fields, rest') = parse_field_declarations [] rest in
+      (Parse_tree.TypeRecord fields, [], rest')
+  | Token.Eq :: Token.DotDot :: rest ->
+      (* Open type *)
+      (Parse_tree.TypeOpen, [], rest)
+  | _ -> 
+      (* Abstract type *)
+      (Parse_tree.TypeAbstract, [], tokens)
+
+and parse_constructor_declarations acc tokens =
+  match parse_constructor_declaration tokens with
+  | Ok (decl, Token.Bar :: rest) -> parse_constructor_declarations (decl :: acc) rest
+  | Ok (decl, rest) -> (List.rev (decl :: acc), rest)
+  | Error _ -> ([], tokens)
+
+and parse_constructor_declaration tokens =
+  match tokens with
+  | Token.Ident name :: rest when validate_capitalized_ident name -> (
+      match rest with
+      | Token.Of :: rest' -> (
+          match parse_constructor_args rest' with
+          | Ok (args, rest'') -> 
+              Ok ({ Parse_tree.constr_name = name; constr_args = args; constr_ret = None }, rest'')
+          | Error err -> Error err)
+      | _ -> 
+          Ok ({ Parse_tree.constr_name = name; constr_args = Parse_tree.NoArgs; constr_ret = None }, rest))
+  | _ -> Error "Expected constructor name"
+
+and parse_constructor_args tokens =
+  match parse_typexpr tokens with
+  | Ok (t, rest) -> (
+      match parse_more_constructor_args [t] rest with
+      | Ok (types, rest') -> Ok (Parse_tree.TupleArgs types, rest')
+      | Error _ -> Ok (Parse_tree.TupleArgs [t], rest))
+  | Error err -> Error err
+
+and parse_more_constructor_args acc tokens =
+  match tokens with
+  | Token.InfixOp "*" :: rest -> (
+      match parse_typexpr rest with
+      | Ok (t, rest') -> parse_more_constructor_args (t :: acc) rest'
+      | Error err -> Error err)
+  | _ -> Ok (List.rev acc, tokens)
+
+and parse_field_declarations acc tokens =
+  match parse_field_declaration tokens with
+  | Ok (decl, Token.Semicolon :: rest) -> parse_field_declarations (decl :: acc) rest
+  | Ok (decl, Token.RBrace :: rest) -> (List.rev (decl :: acc), rest)
+  | Ok (decl, rest) -> (List.rev (decl :: acc), rest) (* Handle other cases *)
+  | Error _ -> ([], tokens)
+
+and parse_field_declaration tokens =
+  let (is_mutable, rest) = 
+    match tokens with
+    | Token.Mutable :: rest' -> (true, rest')
+    | _ -> (false, tokens)
+  in
+  match rest with
+  | Token.Ident field_name :: Token.Colon :: rest' when validate_lowercase_ident field_name -> (
+      match parse_typexpr rest' with
+      | Ok (field_type, rest'') ->
+          Ok ({ Parse_tree.field_name; field_mutable = is_mutable; field_type }, rest'')
+      | Error err -> Error err)
+  | _ -> Error "Expected field declaration"
+
+and parse_exception_def tokens =
+  match parse_constructor_declaration tokens with
+  | Ok (decl, rest) -> Ok (Parse_tree.ExceptionDef decl, rest)
+  | Error err -> Error err
+
+and parse_module_type_def tokens =
+  match tokens with
+  | Token.Ident name :: Token.Eq :: rest when validate_capitalized_ident name -> (
+      match parse_module_type rest with
+      | Ok (mt, rest') -> Ok (Parse_tree.ModuleTypeDef (name, mt), rest')
+      | Error err -> Error err)
+  | _ -> Error "Expected module type definition"
+
+and parse_module_def tokens =
+  match tokens with
+  | Token.Ident mod_name :: Token.Eq :: rest when validate_capitalized_ident mod_name -> (
+      match parse_module_expr rest with
+      | Ok (expr, rest') -> Ok (Parse_tree.ModuleDef (mod_name, expr), rest')
+      | Error err -> Error err)
+  | _ -> Error "Expected module definition"
+
+and parse_module_expr tokens =
+  match tokens with
+  | Token.Struct :: rest -> parse_module_struct rest
+  | Token.Ident mod_name :: rest when validate_capitalized_ident mod_name ->
+      Ok (Parse_tree.ModuleExprPath [mod_name], rest)
+  | _ -> Error "Expected module expression"
+
+and parse_module_struct tokens =
+  let (defs, rest) = parse_module_structure [] tokens in
+  match rest with
+  | Token.End :: rest' -> Ok (Parse_tree.ModuleExprStruct defs, rest')
+  | _ -> Error "Expected 'end' after struct"
+
+and parse_module_structure acc tokens =
+  match tokens with
+  | Token.End :: _ -> (List.rev acc, tokens)
+  | _ -> (
+      match parse_definition tokens with
+      | Ok (def, rest) -> parse_module_structure (def :: acc) rest
+      | Error _ -> (List.rev acc, tokens))
+
+and parse_class_expr tokens =
+  match tokens with
+  | Token.Object :: rest -> (
+      (* object class-body end *)
+      match parse_class_field_list [] rest with
+      | Ok (fields, Token.End :: rest') ->
+          Ok (Parse_tree.ClassObject fields, rest')
+      | _ -> Error "Expected 'end' after class object")
+  | Token.Ident name :: rest when validate_lowercase_ident name ->
+      Ok (Parse_tree.ClassPath (None, name), rest)
+  | _ -> Error "Expected class expression"
+
+and parse_class_field_list acc tokens =
+  match tokens with
+  | Token.End :: _ -> Ok (List.rev acc, tokens)
+  | _ -> (
+      match parse_class_field tokens with
+      | Ok (field, rest) -> parse_class_field_list (field :: acc) rest
+      | Error _ -> Ok (List.rev acc, tokens))
+
+and parse_class_field tokens =
+  match tokens with
+  | Token.Inherit :: rest -> (
+      match parse_class_path rest with
+      | Ok (path, rest') ->
+          let class_expr : Parse_tree.class_expr = Parse_tree.ClassPath path in
+          Ok (Parse_tree.InheritField (class_expr, None), rest')
+      | Error err -> Error err)
+  | Token.Val :: rest -> (
+      match rest with
+      | Token.Ident name :: Token.Eq :: rest' when validate_lowercase_ident name -> (
+          match parse_expr rest' with
+          | Ok (expr, rest'') ->
+              Ok (Parse_tree.ValField (false, name, None, expr), rest'')
+          | Error err -> Error err)
+      | _ -> Error "Expected val field")
+  | Token.Method :: rest -> (
+      match rest with
+      | Token.Ident name :: Token.Eq :: rest' when validate_lowercase_ident name -> (
+          match parse_expr rest' with
+          | Ok (expr, rest'') ->
+              Ok (Parse_tree.MethodField (false, name, [], None, expr), rest'')
+          | Error err -> Error err)
+      | _ -> Error "Expected method field")
+  | _ -> Error "Expected class field"
+
+and parse_class_def tokens =
+  (* Simplified class definition parsing *)
+  match tokens with
+  | Token.Ident class_name :: Token.Eq :: rest when validate_lowercase_ident class_name -> (
+      match parse_class_expr rest with
+      | Ok (expr, rest') -> 
+          let def = {
+            Parse_tree.class_virtual = false;
+            class_params = [];
+            class_name;
+            class_args = [];
+            class_type_constraint = None;
+            class_expr = expr;
+          } in
+          Ok (Parse_tree.ClassDef [def], rest')
+      | Error err -> Error err)
+  | _ -> Error "Expected class definition"
+
+and parse_open_def tokens =
+  match parse_module_path tokens with
+  | Ok (path, rest) -> Ok (Parse_tree.OpenDef path, rest)
+  | Error err -> Error err
+
+and parse_include_def tokens =
+  match parse_module_expr tokens with
+  | Ok (expr, rest) -> Ok (Parse_tree.IncludeDef expr, rest)
+  | Error err -> Error err
+
+(* Module type parsing functions *)
+and parse_module_type tokens =
+  match tokens with
+  | Token.Sig :: rest -> parse_module_signature rest
+  | Token.Ident name :: rest when validate_capitalized_ident name ->
+      Ok (Parse_tree.ModuleTypePath (None, name), rest)
+  | _ -> Error "Expected module type"
+
+and parse_module_signature tokens =
+  let (specs, rest) = parse_specification_list [] tokens in
+  match rest with
+  | Token.End :: rest' -> Ok (Parse_tree.ModuleTypeSignature specs, rest')
+  | _ -> Error "Expected 'end' after signature"
+
+and parse_specification_list acc tokens =
+  match tokens with
+  | Token.End :: _ -> (List.rev acc, tokens)
+  | _ -> (
+      match parse_specification tokens with
+      | Ok (spec, rest) -> parse_specification_list (spec :: acc) rest
+      | Error _ -> (List.rev acc, tokens))
+
+and parse_specification tokens =
+  match tokens with
+  | Token.Val :: rest -> parse_value_specification rest
+  | Token.Type :: rest -> parse_type_specification rest
+  | Token.Exception :: rest -> parse_exception_specification rest
+  | Token.Module :: rest -> parse_module_specification rest
+  | Token.Open :: rest -> parse_open_specification rest
+  | _ -> Error "Expected specification"
+
+and parse_value_specification tokens =
+  match tokens with
+  | Token.Ident name :: Token.Colon :: rest when validate_lowercase_ident name -> (
+      match parse_typexpr rest with
+      | Ok (t, rest') -> Ok (Parse_tree.ValueSpec (name, t), rest')
+      | Error err -> Error err)
+  | _ -> Error "Expected value specification"
+
+and parse_type_specification tokens =
+  match parse_type_declarations [] tokens with
+  | Ok (decls, rest) -> Ok (Parse_tree.TypeSpec decls, rest)
+  | Error err -> Error err
+
+and parse_exception_specification tokens =
+  match parse_constructor_declaration tokens with
+  | Ok (decl, rest) -> Ok (Parse_tree.ExceptionSpec decl, rest)
+  | Error err -> Error err
+
+and parse_module_specification tokens =
+  match tokens with
+  | Token.Ident name :: Token.Colon :: rest when validate_capitalized_ident name -> (
+      match parse_module_type rest with
+      | Ok (mt, rest') -> Ok (Parse_tree.ModuleSpec (name, mt), rest')
+      | Error err -> Error err)
+  | _ -> Error "Expected module specification"
+
+and parse_open_specification tokens =
+  match parse_module_path tokens with
+  | Ok (path, rest) -> Ok (Parse_tree.OpenSpec path, rest)
+  | Error err -> Error err
+
+(* Public definition parsing functions *)
+let parse_definition_from_lexer lexer =
+  match tokens_from_lexer lexer with
+  | Ok tokens -> (
+      match parse_definition tokens with
+      | Ok (def, []) -> Ok def
+      | Ok (_, remaining) ->
+          Error ("Unexpected tokens remaining: " ^
+                String.concat ~sep:" " (List.map remaining ~f:string_of_token))
+      | Error err -> Error err)
+  | Error e -> Error e
+
+let parse_definition_string str source =
+  let lexer = Lexer.create str source in
+  parse_definition_from_lexer lexer
+
+let parse_module_structure_from_lexer lexer =
+  match tokens_from_lexer lexer with
+  | Ok tokens -> (
+      let (defs, remaining) = parse_module_structure [] tokens in
+      match remaining with
+      | [] -> Ok defs
+      | _ -> Error ("Unexpected tokens remaining: " ^
+                   String.concat ~sep:" " (List.map remaining ~f:string_of_token)))
+  | Error e -> Error e
+
+let parse_module_structure_string str source =
+  let lexer = Lexer.create str source in
+  parse_module_structure_from_lexer lexer

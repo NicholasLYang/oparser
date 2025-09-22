@@ -1030,10 +1030,9 @@ let rec get_next lexer =
             parse_linenum_directive lexer index
             |> Result.bind ~f:(fun () -> get_next lexer)
           ) else (
-            (* Regular # as part of infix operator *)
+            (* Hash token for method calls *)
             lexer.at_line_start <- false;
-            shift_back lexer;
-            infix_symbol lexer index
+            Ok (Some (s Hash ~start_index:index ~end_index:index))
           )
       | '&' -> (
           lexer.at_line_start <- false;

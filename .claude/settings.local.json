@@ -10,7 +10,8 @@
       "Bash(./test_expressions_manual)",
       "Bash(./test_complex_expressions)",
       "Bash(grep:*)",
-      "Bash(awk:*)"
+      "Bash(awk:*)",
+      "Bash(echo:*)"
     ],
     "deny": []
   }

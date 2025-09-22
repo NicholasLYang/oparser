@@ -15,3 +15,43 @@
 (rule
  (alias runtest_recovery)
  (action (run ./test_error_recovery.exe)))
+
+(executable
+ (public_name test_expr_parsing)
+ (name test_expr_parsing)
+ (modules test_expr_parsing)
+ (libraries oparser base stdio grace))
+
+(rule
+ (alias runtest_expr)
+ (action (run ./test_expr_parsing.exe)))
+
+(executable
+ (public_name test_class_parsing)
+ (name test_class_parsing)
+ (modules test_class_parsing)
+ (libraries oparser base stdio))
+
+(rule
+ (alias runtest_class)
+ (action (run ./test_class_parsing.exe)))
+
+(executable
+ (public_name test_definition_parsing)
+ (name test_definition_parsing)
+ (modules test_definition_parsing)
+ (libraries oparser base stdio))
+
+(rule
+ (alias runtest_definition)
+ (action (run ./test_definition_parsing.exe)))
+
+(executable
+ (public_name test_polymorphic_variants)
+ (name test_polymorphic_variants)
+ (modules test_polymorphic_variants)
+ (libraries oparser base stdio))
+
+(rule
+ (alias runtest_polyvar)
+ (action (run ./test_polymorphic_variants.exe)))
